@@ -85,7 +85,10 @@ export class TokenProviderService {
    */
   private async tryPlaywrightAutoAuth(): Promise<string | null> {
     this.logger.log('Spinning up temporary Playwright headless browser instance...');
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+    });
     let interceptedToken: string | null = null;
 
     try {
