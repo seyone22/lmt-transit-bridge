@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import WebSocket from 'ws';
 import { GtfsRealtimePublisherService } from '../publisher/gtfs-realtime-publisher.service';
+import { TokenProviderService } from '../auth/token-provider.service';
 
 @Injectable()
 export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
@@ -10,7 +11,10 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
   private reconnectTimeout: NodeJS.Timeout | null = null;
   private isConnected = false;
 
-  constructor(private readonly publisher: GtfsRealtimePublisherService) {}
+  constructor(
+    private readonly publisher: GtfsRealtimePublisherService,
+    private readonly tokenProvider: TokenProviderService,
+  ) {}
 
   onModuleInit() {
     this.connect();
@@ -24,11 +28,19 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
     return this.isConnected;
   }
 
-  private connect() {
+  private async connect(forceTokenRefresh = false) {
     const wsUrl = process.env.LMT_WS_URL || 'wss://metrobusapiprod.eimsky.com/ticketing-service/ws';
-    const token = process.env.LMT_WS_TOKEN || 'eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiYTFmYmY0MWYtMzY2Zi00Mjg5LTllMTMtYWZhNmNlMDAzZDc2IiwiZW1haWwiOiJjdXN0b21lci4wNzY2NzA2ODE2QGludGVybmFsLm1ldHJvYnVzLmxrIiwidXNlcl90eXBlIjoiY3VzdG9tZXIiLCJ0b2tlbl9pZCI6IjI5OWRmNGZkLWRmZDAtNGE0NC1hOTAzLTVkNzY1YmQ2MjE5MyIsImlzcyI6Im50Yy11c2VyLXNlcnZpY2UiLCJzdWIiOiJhMWZiZjQxZi0zNjZmLTQyODktOWUxMy1hZmE2Y2UwMDNkNzYiLCJhdWQiOlsibnRjLWFwaSJdLCJleHAiOjE4MDYxMzkzOTgsIm5iZiI6MTc3NDYwMzM5OCwiaWF0IjoxNzc0NjAzMzk4fQ.Nf8JcXTXOqIKuMibN4xlvirkKd7p56Sj2nHFIZFfWYD0l9SzKqayr6vznNto33aw-hvR5aVGHwoZN_CIr0RqBg';
-    const fullUrl = token ? `${wsUrl}?token=${token}` : wsUrl;
+    let token = '';
 
+    try {
+      token = await this.tokenProvider.getOrRefreshToken(forceTokenRefresh);
+    } catch (err: any) {
+      this.logger.error(`Failed to acquire valid JWT token: ${err.message}`);
+      this.scheduleReconnect(10000);
+      return;
+    }
+
+    const fullUrl = token ? `${wsUrl}?token=${token}` : wsUrl;
     this.logger.log(`Connecting to SmartMetro WebSocket stream...`);
 
     try {
@@ -57,11 +69,14 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(`SmartMetro WebSocket closed [Code: ${code}, Reason: ${reason.toString() || 'None'}]`);
         this.isConnected = false;
         this.stopHeartbeat();
-        this.scheduleReconnect();
+
+        // If closed with 401 / 1006 auth failure, force token refresh on reconnect
+        const isAuthError = code === 401 || code === 1006 || reason.toString().includes('401');
+        this.scheduleReconnect(5000, isAuthError);
       });
     } catch (err: any) {
       this.logger.error(`Failed to create WebSocket instance: ${err.message}`);
-      this.scheduleReconnect();
+      this.scheduleReconnect(5000, true);
     }
   }
 
@@ -81,11 +96,11 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private scheduleReconnect(delayMs = 5000) {
+  private scheduleReconnect(delayMs = 5000, forceTokenRefresh = false) {
     if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
-    this.logger.log(`Scheduling WebSocket reconnect in ${delayMs / 1000}s...`);
+    this.logger.log(`Scheduling WebSocket reconnect in ${delayMs / 1000}s (forceTokenRefresh=${forceTokenRefresh})...`);
     this.reconnectTimeout = setTimeout(() => {
-      this.connect();
+      this.connect(forceTokenRefresh);
     }, delayMs);
   }
 
