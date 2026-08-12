@@ -26,10 +26,10 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
 
   private connect() {
     const wsUrl = process.env.LMT_WS_URL || 'wss://metrobusapiprod.eimsky.com/ticketing-service/ws';
-    const token = process.env.LMT_WS_TOKEN || '';
+    const token = process.env.LMT_WS_TOKEN || 'eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiYTFmYmY0MWYtMzY2Zi00Mjg5LTllMTMtYWZhNmNlMDAzZDc2IiwiZW1haWwiOiJjdXN0b21lci4wNzY2NzA2ODE2QGludGVybmFsLm1ldHJvYnVzLmxrIiwidXNlcl90eXBlIjoiY3VzdG9tZXIiLCJ0b2tlbl9pZCI6IjI5OWRmNGZkLWRmZDAtNGE0NC1hOTAzLTVkNzY1YmQ2MjE5MyIsImlzcyI6Im50Yy11c2VyLXNlcnZpY2UiLCJzdWIiOiJhMWZiZjQxZi0zNjZmLTQyODktOWUxMy1hZmE2Y2UwMDNkNzYiLCJhdWQiOlsibnRjLWFwaSJdLCJleHAiOjE4MDYxMzkzOTgsIm5iZiI6MTc3NDYwMzM5OCwiaWF0IjoxNzc0NjAzMzk4fQ.Nf8JcXTXOqIKuMibN4xlvirkKd7p56Sj2nHFIZFfWYD0l9SzKqayr6vznNto33aw-hvR5aVGHwoZN_CIr0RqBg';
     const fullUrl = token ? `${wsUrl}?token=${token}` : wsUrl;
 
-    this.logger.log(`Connecting to SmartMetro WebSocket: ${wsUrl}`);
+    this.logger.log(`Connecting to SmartMetro WebSocket stream...`);
 
     try {
       this.ws = new WebSocket(fullUrl, {
@@ -40,7 +40,7 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
       });
 
       this.ws.on('open', () => {
-        this.logger.log('Connected successfully to SmartMetro WebSocket');
+        this.logger.log('⚡ Connected successfully to SmartMetro WebSocket stream!');
         this.isConnected = true;
         this.startHeartbeat();
       });
@@ -105,39 +105,42 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
       const text = rawData.toString();
       if (!text || text.trim() === '') return;
 
-      const payload = JSON.parse(text);
-      this.logger.debug(`Received WS payload: ${text.slice(0, 150)}`);
+      const messageObj = JSON.parse(text);
+      const eventType = messageObj.type || messageObj.event || messageObj.action;
+      const rawPayload = messageObj.payload || messageObj.data;
 
-      // SmartMetro WebSocket event types: 'gps_update', 'location_update', etc.
-      const eventType = payload.type || payload.event || payload.action;
-      const data = payload.data || payload.payload || payload;
+      if (eventType === 'gps_update' && rawPayload) {
+        const busList: any[] = Array.isArray(rawPayload) ? rawPayload : [rawPayload];
 
-      if (data && (data.busReg || data.vehicleId || data.lat)) {
-        const busReg = data.busReg || data.vehicleId || data.bus_reg || 'UNKNOWN_BUS';
-        const lat = parseFloat(data.lat || data.latitude);
-        const lng = parseFloat(data.lng || data.longitude);
+        for (const bus of busList) {
+          const regNum = bus.registration_number || bus.busReg || bus.vehicle_id || 'UNKNOWN_BUS';
+          const lat = parseFloat(bus.lat || bus.latitude);
+          const lng = parseFloat(bus.lng || bus.longitude);
 
-        if (!isNaN(lat) && !isNaN(lng)) {
-          const tripId = data.tripId || data.trip_id || `BUS_${busReg}`;
-          const speed = parseFloat(data.speed || 0);
-          const bearing = parseFloat(data.bearing || data.heading || 0);
-          const timestamp = data.timestamp ? new Date(data.timestamp).toISOString() : new Date().toISOString();
+          if (!isNaN(lat) && !isNaN(lng)) {
+            const tripId = bus.route_id ? `TRIP_${bus.route_id.slice(0, 8)}` : `BUS_${regNum}`;
+            const speed = parseFloat(bus.speed || 0);
+            const bearing = parseFloat(bus.bearing || bus.heading || 0);
+            const tsMs = typeof bus.timestamp === 'number' ? bus.timestamp : Date.now();
 
-          this.publisher.publishVehiclePosition({
-            trip_id: tripId,
-            vehicle_id: busReg,
-            vehicle_label: busReg,
-            license_plate: busReg,
-            latitude: lat,
-            longitude: lng,
-            speed: isNaN(speed) ? 0 : speed,
-            bearing: isNaN(bearing) ? 0 : bearing,
-            timestamp,
-          });
+            this.publisher.publishVehiclePosition({
+              trip_id: tripId,
+              vehicle_id: regNum,
+              vehicle_label: regNum,
+              license_plate: regNum,
+              latitude: lat,
+              longitude: lng,
+              speed: isNaN(speed) ? 0 : speed,
+              bearing: isNaN(bearing) ? 0 : bearing,
+              timestamp: new Date(tsMs).toISOString(),
+            });
+          }
         }
+      } else if (eventType === 'init') {
+        this.logger.log(`Received SmartMetro init framing: ${JSON.stringify(rawPayload)}`);
       }
     } catch (err: any) {
-      this.logger.error(`Error parsing WebSocket message: ${err.message}`);
+      this.logger.error(`Error processing SmartMetro WebSocket message: ${err.message}`);
     }
   }
 }
