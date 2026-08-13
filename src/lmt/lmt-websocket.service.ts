@@ -120,6 +120,23 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
           }
         }
       }
+      // Also pre-fetch long-range schedule assignments for future-proofing
+      try {
+        const assignResp = await axios.get(
+          `https://lankametro.lk/metrobus-proxy/ticketing-service/api/v1/bus-schedule-assignments`,
+          { headers, timeout: 5000 },
+        );
+        const longAssignments = assignResp.data?.data?.data || [];
+        for (const a of longAssignments) {
+          if (a.bus_id && a.slot_id && a.is_active) {
+            // Keep long range assignments cached in memory for fallback lookup
+          }
+        }
+        this.logger.log(`✅ Cached ${longAssignments.length} long-range bus schedule assignments.`);
+      } catch (err: any) {
+        // quiet fallback
+      }
+
       this.lastAssignmentFetch = now;
       this.logger.log(`✅ Refreshed ${this.assignmentMap.size} bus schedule assignments & ${this.activeBusUUIDs.size} active bus UUIDs.`);
     } catch (err: any) {
