@@ -96,10 +96,10 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
   private startMobileTrackingPolling() {
     if (this.pollInterval) clearInterval(this.pollInterval);
 
-    // Poll Mobile App tracking endpoint every 10 seconds
+    // Poll Mobile App tracking endpoint every 5 seconds for ultra-crisp real-time updates
     this.pollInterval = setInterval(async () => {
       await this.pollMobileAppBusTracking();
-    }, 10000);
+    }, 5000);
   }
 
   private async pollMobileAppBusTracking() {
@@ -117,7 +117,7 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
       for (const [busId, busInfo] of this.activeBusUUIDs.entries()) {
         try {
           const url = `https://lankametro.lk/metrobus-proxy/ticketing-service/api/v1/buses/${busId}/tracking`;
-          const resp = await axios.get(url, { headers, timeout: 4000 });
+          const resp = await axios.get(url, { headers, timeout: 3500 });
 
           if (resp.status === 200 && resp.data?.data) {
             const trackData = resp.data.data;
