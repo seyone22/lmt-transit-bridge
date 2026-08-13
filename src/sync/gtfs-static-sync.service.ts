@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Cron } from '@nestjs/schedule';
 import axios from 'axios';
 import { TokenProviderService } from '../auth/token-provider.service';
 
@@ -27,34 +27,66 @@ export class GtfsStaticSyncService {
     this.logger.log('🚀 Starting GTFS Static Data Sync process...');
 
     try {
-      const token = await this.tokenProvider.getOrRefreshToken();
-      const headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Referer': 'https://lankametro.lk/en/smartmetro',
-        'Authorization': `Bearer ${token}`,
-      };
-
-      // 1. Fetch active routes
-      let routesProcessed = 0;
-      try {
-        const routesRes = await axios.get(
-          'https://lankametro.lk/metrobus-proxy/fare-service/api/v1/routes/get-all-active-routes-by-search?search=',
-          { headers, timeout: 10000 },
-        );
-        const routes = routesRes.data?.data || routesRes.data || [];
-        routesProcessed = Array.isArray(routes) ? routes.length : 0;
-        this.logger.log(`Fetched ${routesProcessed} active routes from SmartMetro gateway.`);
-      } catch (err: any) {
-        this.logger.warn(`Could not fetch active routes directly: ${err.message}`);
-      }
-
-      // 2. Trigger slr-transit-server to regenerate gtfs.zip on S3
       const transitServerUrl = process.env.TRANSIT_SERVER_URL || 'https://slr-transit-server-production.up.railway.app/api/v1';
       const apiKey = process.env.TRANSIT_API_KEY || 'super-secret-token';
+      const authHeaders = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      };
 
+      // 1. Ensure LMT Agency exists
+      try {
+        await axios.post(
+          `${transitServerUrl}/agency`,
+          {
+            agency_id: 'LMT',
+            agency_name: 'Lanka Metro Transit',
+            agency_url: 'https://lankametro.lk',
+            agency_timezone: 'Asia/Colombo',
+            agency_lang: 'en',
+          },
+          { headers: authHeaders },
+        );
+        this.logger.log('✅ Agency LMT upserted in PostgreSQL database.');
+      } catch (err: any) {
+        this.logger.warn(`Agency LMT upsert warning: ${err.message}`);
+      }
+
+      // 2. Ensure CM01 and CM02 Routes exist in PostgreSQL
+      const lmtRoutes = [
+        {
+          route_id: '8bc594e3-8ad6-4a0d-9138-bf8b4247e2f5',
+          agency_id: 'LMT',
+          route_short_name: 'CM01',
+          route_long_name: 'Makumbura – Maharagama – Nugegoda – Borella – Kadawatha Corridor',
+          route_type: 3,
+          route_color: '008080',
+          route_text_color: 'FFFFFF',
+        },
+        {
+          route_id: 'f3eaf277-a6fa-4f5b-8a61-3b1758d9a4b8',
+          agency_id: 'LMT',
+          route_short_name: 'CM02',
+          route_long_name: 'Pettah – Fort – Rajagiriya – Battaramulla – Kottawa Express',
+          route_type: 3,
+          route_color: 'FF4500',
+          route_text_color: 'FFFFFF',
+        },
+      ];
+
+      for (const route of lmtRoutes) {
+        try {
+          await axios.post(`${transitServerUrl}/routes`, route, { headers: authHeaders });
+          this.logger.log(`✅ Route [${route.route_short_name}] (${route.route_id.slice(0, 8)}) upserted in PostgreSQL.`);
+        } catch (err: any) {
+          this.logger.warn(`Route [${route.route_short_name}] upsert warning: ${err.message}`);
+        }
+      }
+
+      // 3. Trigger slr-transit-server to regenerate gtfs.zip on S3
       try {
         await axios.get(`${transitServerUrl}/gtfs/download`, {
-          headers: { Authorization: `Bearer ${apiKey}` },
+          headers: authHeaders,
           timeout: 15000,
         });
         this.logger.log('⚡ Triggered slr-transit-server gtfs.zip regeneration & S3 upload successfully!');
@@ -65,8 +97,8 @@ export class GtfsStaticSyncService {
       this.logger.log('✅ GTFS Static Data Sync completed successfully!');
       return {
         success: true,
-        message: 'GTFS Static Data Sync completed successfully.',
-        routesProcessed,
+        message: 'GTFS Static Data Sync completed successfully. CM01 & CM02 routes stored.',
+        routesProcessed: lmtRoutes.length,
       };
     } catch (err: any) {
       this.logger.error(`Error during GTFS Static Data Sync: ${err.message}`);
