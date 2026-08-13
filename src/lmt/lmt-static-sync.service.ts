@@ -227,7 +227,28 @@ export class LmtStaticSyncService implements OnModuleInit {
       }
       this.logger.log(`✅ Ingested ${parentStationMap.size} parent station hubs and ${stopsMap.size} platform stops.`);
 
-      // 5. Sync Service Alerts & Advisories
+      // 5. Ingest GTFS Fare Attributes & Fare Rules
+      await this.publisher.publishFareAttribute({
+        fare_id: 'FARE_EXPRESS',
+        price: 100.0,
+        currency_type: 'LKR',
+        payment_method: 0, // Pay on board / POS validator
+        transfers: 0,
+        transfer_duration: 0,
+      });
+
+      await this.publisher.publishFareRule({
+        fare_id: 'FARE_EXPRESS',
+        route_id: '8bc594e3-8ad6-4a0d-9138-bf8b4247e2f5', // CM01
+      });
+
+      await this.publisher.publishFareRule({
+        fare_id: 'FARE_EXPRESS',
+        route_id: 'f3eaf277-a6fa-4f5b-8a61-3b1758d9a4b8', // CM02
+      });
+      this.logger.log('✅ GTFS Fare Attributes (LKR 100.00 Express Fare) & Fare Rules ingested.');
+
+      // 6. Sync Service Alerts & Advisories
       await this.syncNotificationsAndAlerts();
 
       this.logger.log('🎉 Master Automated GTFS Ingestion Cycle Complete!');

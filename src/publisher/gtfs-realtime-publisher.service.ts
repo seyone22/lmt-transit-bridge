@@ -89,6 +89,14 @@ export class GtfsRealtimePublisherService {
     return this.postToCrudEndpoint('/stop-times', data);
   }
 
+  async publishFareAttribute(data: any): Promise<boolean> {
+    return this.postToCrudEndpoint('/fare-attributes', data);
+  }
+
+  async publishFareRule(data: any): Promise<boolean> {
+    return this.postToCrudEndpoint('/fare-rules', data);
+  }
+
   async publishAlert(data: any): Promise<boolean> {
     return this.postToCrudEndpoint('/realtime/alerts', data);
   }
