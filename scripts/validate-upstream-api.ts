@@ -48,7 +48,10 @@ async function validateApiSpec() {
         }
       }
 
-      let url = `${baseUrl}${resolvedPath}`;
+      let url = pathStr.startsWith('/gcs-proxy')
+        ? `https://lankametro.lk${pathStr}`
+        : `${baseUrl}${resolvedPath}`;
+
       if (queryParams.length > 0) {
         url += `?${queryParams.join('&')}`;
       }

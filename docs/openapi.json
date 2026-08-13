@@ -200,6 +200,15 @@
         }
       }
     },
+    "/gcs-proxy/artwork_storage_dev/new-release/v7-Forward-M-K.geojson": {
+      "get": {
+        "summary": "Fetch High-Resolution Route Geometry GeoJSON",
+        "description": "Returns 1,256 high-resolution shape waypoints for Makumbura - Kadawatha - Colombo Fort transit corridors.",
+        "responses": {
+          "200": { "description": "GeoJSON FeatureCollection object" }
+        }
+      }
+    },
     "/user-service/api/v1/auth/login": {
       "post": {
         "summary": "Authenticate User / Driver Account",
