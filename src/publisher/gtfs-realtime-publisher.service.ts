@@ -6,8 +6,17 @@ import { CreateVehiclePositionDto } from './dto/vehicle-position.dto';
 export class GtfsRealtimePublisherService {
   private readonly logger = new Logger(GtfsRealtimePublisherService.name);
 
+  private getBaseUrl(): string {
+    return (
+      process.env.TRANSIT_SERVER_URL ||
+      process.env.RAILWAY_PRIVATE_DOMAIN
+        ? `http://${process.env.RAILWAY_PRIVATE_DOMAIN}:3000/api/v1`
+        : 'http://slr-transit-server.railway.internal:3000/api/v1'
+    );
+  }
+
   async publishVehiclePosition(dto: CreateVehiclePositionDto): Promise<boolean> {
-    const baseUrl = process.env.TRANSIT_SERVER_URL || 'https://slr-transit-server-production.up.railway.app/api/v1';
+    const baseUrl = this.getBaseUrl();
     const apiKey = process.env.TRANSIT_API_KEY || 'super-secret-key';
 
     try {
@@ -20,10 +29,34 @@ export class GtfsRealtimePublisherService {
         timeout: 5000,
       });
 
-      this.logger.log(`Published VehiclePosition [${dto.vehicle_id || dto.trip_id}] -> (${dto.latitude.toFixed(4)}, ${dto.longitude.toFixed(4)})`);
+      this.logger.log(`Published VehiclePosition [${dto.vehicle_id || dto.trip_id}] via Private Net -> (${dto.latitude.toFixed(4)}, ${dto.longitude.toFixed(4)})`);
       return true;
     } catch (err: any) {
+      // Fallback to public domain if private networking is unresolvable locally
+      if (baseUrl.includes('railway.internal')) {
+        return this.publishVehiclePositionPublicFallback(dto);
+      }
       this.logger.error(`Failed to publish VehiclePosition for ${dto.vehicle_id || dto.trip_id}: ${err.message}`);
+      return false;
+    }
+  }
+
+  private async publishVehiclePositionPublicFallback(dto: CreateVehiclePositionDto): Promise<boolean> {
+    const fallbackUrl = 'https://api.transit.seyone.dev/api/v1/realtime/vehicle-positions';
+    const apiKey = process.env.TRANSIT_API_KEY || 'super-secret-key';
+
+    try {
+      await axios.post(fallbackUrl, dto, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+          'x-api-key': apiKey,
+        },
+        timeout: 5000,
+      });
+      return true;
+    } catch (err: any) {
+      this.logger.error(`Fallback VehiclePosition publish failed: ${err.message}`);
       return false;
     }
   }
@@ -53,7 +86,7 @@ export class GtfsRealtimePublisherService {
   }
 
   private async postToCrudEndpoint(endpoint: string, payload: any): Promise<boolean> {
-    const baseUrl = process.env.TRANSIT_SERVER_URL || 'https://api.transit.seyone.dev/api/v1';
+    const baseUrl = this.getBaseUrl();
     const apiKey = process.env.TRANSIT_API_KEY || 'super-secret-key';
 
     try {
@@ -67,6 +100,24 @@ export class GtfsRealtimePublisherService {
       });
       return true;
     } catch (err: any) {
+      // Retry via public domain fallback if private networking is unresolvable locally
+      if (baseUrl.includes('railway.internal')) {
+        const fallbackUrl = `https://api.transit.seyone.dev/api/v1${endpoint}`;
+        try {
+          await axios.post(fallbackUrl, payload, {
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`,
+              'x-api-key': apiKey,
+            },
+            timeout: 10000,
+          });
+          return true;
+        } catch (fallbackErr: any) {
+          this.logger.warn(`Failed to post to CRUD ${endpoint}: ${fallbackErr.message}`);
+          return false;
+        }
+      }
       this.logger.warn(`Failed to post to CRUD ${endpoint}: ${err.message}`);
       return false;
     }
