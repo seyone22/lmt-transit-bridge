@@ -65,6 +65,10 @@ export class GtfsRealtimePublisherService {
     return this.postToCrudEndpoint('/agency', data);
   }
 
+  async publishAttribution(data: any): Promise<boolean> {
+    return this.postToCrudEndpoint('/attribution', data);
+  }
+
   async publishRoute(data: any): Promise<boolean> {
     return this.postToCrudEndpoint('/routes', data);
   }
@@ -83,6 +87,10 @@ export class GtfsRealtimePublisherService {
 
   async publishStopTime(data: any): Promise<boolean> {
     return this.postToCrudEndpoint('/stop-times', data);
+  }
+
+  async publishAlert(data: any): Promise<boolean> {
+    return this.postToCrudEndpoint('/realtime/alerts', data);
   }
 
   private async postToCrudEndpoint(endpoint: string, payload: any): Promise<boolean> {
