@@ -1,0 +1,30 @@
+name: Weekly Upstream API OpenAPI Health Validation
+
+on:
+  schedule:
+    # Run every Sunday at midnight UTC (5:30 AM IST)
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+
+jobs:
+  validate-api:
+    name: Validate Upstream LMT Go API Endpoints
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run OpenAPI Specification Health Validation
+        env:
+          LMT_JWT_TOKEN: ${{ secrets.LMT_JWT_TOKEN }}
+        run: npx ts-node scripts/validate-upstream-api.ts

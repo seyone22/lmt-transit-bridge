@@ -1,0 +1,204 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Lanka Metro Transit (LMT Go) Reverse-Engineered Upstream API",
+    "description": "Master OpenAPI 3.0 specification of all reverse-engineered upstream microservices, WebSocket streams, and static artwork storage buckets for Lanka Metro Transit (Eimsky / NTC / HNB). Maintains automated weekly health validation.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "SLR & LMT Open Transit Engine",
+      "url": "https://github.com/seyone22/lmt-transit-bridge"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://lankametro.lk/metrobus-proxy",
+      "description": "LMT Go Production Gateway Proxy"
+    },
+    {
+      "url": "https://metrobusapiprod.eimsky.com",
+      "description": "Eimsky Backend Production Microservices Server"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "EdDSA signed JWT token obtained via user-service auth endpoint."
+      }
+    }
+  },
+  "security": [
+    {
+      "BearerAuth": []
+    }
+  ],
+  "paths": {
+    "/user-service/api/v1/notifications": {
+      "get": {
+        "summary": "Fetch Broadcast Service Alerts & Public Notifications",
+        "description": "Returns active service announcements, route updates, and broadcast notifications for the LMT Go Mobile App.",
+        "responses": {
+          "200": {
+            "description": "Active notifications array",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": { "type": "array", "items": { "type": "object" } },
+                        "has_more": { "type": "boolean" },
+                        "count": { "type": "integer" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/user-service/api/v1/users": {
+      "get": {
+        "summary": "Fetch Operating Roster Directory (Drivers & Conductors)",
+        "description": "Returns user accounts filtered by type (user_type=driver or user_type=conductor).",
+        "parameters": [
+          {
+            "name": "user_type",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "enum": ["driver", "conductor", "customer"] }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User accounts directory array"
+          }
+        }
+      }
+    },
+    "/ticketing-service/api/v1/buses": {
+      "get": {
+        "summary": "Fetch Master Fleet Register (All 10 Operating Buses)",
+        "description": "Returns full master bus register including manufacturer (Foton C12), seating capacity (35), standing capacity (45), fleet numbers, and UUIDs.",
+        "responses": {
+          "200": {
+            "description": "Master bus array"
+          }
+        }
+      }
+    },
+    "/ticketing-service/api/v1/buses/{bus_id}/tracking": {
+      "get": {
+        "summary": "Fetch Real-Time Mobile App Bus Tracking & Delay",
+        "description": "Returns real-time GPS position (lat, lng, recorded_at), current segment, delay_minutes, and stop ETAs for a specific bus UUID.",
+        "parameters": [
+          {
+            "name": "bus_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Real-time bus tracking payload"
+          }
+        }
+      }
+    },
+    "/ticketing-service/api/v1/buses/{bus_id}/assignments": {
+      "get": {
+        "summary": "Fetch Per-Bus Roster & Driver/Conductor Assignments",
+        "description": "Returns operational status, maintenance flags, assigned route, and paired driver + conductor account UUIDs for a specific bus.",
+        "parameters": [
+          {
+            "name": "bus_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bus crew and route assignment object"
+          }
+        }
+      }
+    },
+    "/ticketing-service/api/v1/bus-schedule-assignments": {
+      "get": {
+        "summary": "Fetch Active Schedule Assignments Across Fleet",
+        "description": "Returns all long-range bus schedule assignments linking bus UUIDs, route IDs, and active daily schedule slots.",
+        "responses": {
+          "200": {
+            "description": "Active schedule assignments array"
+          }
+        }
+      }
+    },
+    "/ticketing-service/api/v1/devices": {
+      "get": {
+        "summary": "Fetch Master Hardware Validator Register (50 Devices)",
+        "description": "Returns full hardware register of Aiken T16 handheld POS thermal printers and optical QR door turnstile scanners.",
+        "responses": {
+          "200": {
+            "description": "POS & validator hardware devices array"
+          }
+        }
+      }
+    },
+    "/ticketing-service/api/v1/tickets": {
+      "get": {
+        "summary": "Fetch Live Issued Passenger Tickets",
+        "description": "Returns live ticket sales transaction log including fare amounts, boarding stop IDs, and alighting stop IDs.",
+        "responses": {
+          "200": {
+            "description": "Live passenger tickets array"
+          }
+        }
+      }
+    },
+    "/fare-service/api/v1/routes": {
+      "get": {
+        "summary": "Fetch Bus Corridor Routes & Directions",
+        "description": "Returns master routes (CM01, CM02), route colors, and direction UUIDs.",
+        "responses": {
+          "200": {
+            "description": "Routes array"
+          }
+        }
+      }
+    },
+    "/fare-service/api/v1/routes/{route_id}/stops": {
+      "get": {
+        "summary": "Fetch Ordered Directional Stop Sequence",
+        "description": "Returns ordered platform stop sequence with exact coordinates and platform codes for a specific route ID and direction ID.",
+        "parameters": [
+          {
+            "name": "route_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "direction_id",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ordered directional stops array"
+          }
+        }
+      }
+    }
+  }
+}
