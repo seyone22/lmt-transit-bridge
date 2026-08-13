@@ -10,6 +10,38 @@ interface ScheduleAssignment {
   bus_id: string;
 }
 
+interface LastPosition {
+  latitude: number;
+  longitude: number;
+  timestamp: number;
+  speed: number;
+  bearing: number;
+}
+
+function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function calculateBearingDeg(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const p1 = (lat1 * Math.PI) / 180;
+  const p2 = (lat2 * Math.PI) / 180;
+  const dl = ((lon2 - lon1) * Math.PI) / 180;
+  const y = Math.sin(dl) * Math.cos(p2);
+  const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+  const brng = (Math.atan2(y, x) * 180) / Math.PI;
+  return Math.round((brng + 360) % 360);
+}
+
 @Injectable()
 export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(LmtWebsocketService.name);
@@ -21,6 +53,8 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
 
   private assignmentMap = new Map<string, ScheduleAssignment>();
   private activeBusUUIDs = new Map<string, { bus_id: string; regNum: string; trip_id: string; route_id: string }>();
+  private lastSeenWebSocket = new Map<string, number>();
+  private lastPositionMap = new Map<string, LastPosition>();
   private lastAssignmentFetch = 0;
 
   constructor(
@@ -96,7 +130,7 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
   private startMobileTrackingPolling() {
     if (this.pollInterval) clearInterval(this.pollInterval);
 
-    // Poll Mobile App tracking endpoint every 5 seconds for ultra-crisp real-time updates
+    // Delta Polling Loop: Check every 5 seconds, but ONLY poll buses quiet on WebSocket (> 15s)
     this.pollInterval = setInterval(async () => {
       await this.pollMobileAppBusTracking();
     }, 5000);
@@ -106,6 +140,21 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
     await this.refreshScheduleAssignmentsIfNeeded();
     if (this.activeBusUUIDs.size === 0) return;
 
+    const now = Date.now();
+    const quietBuses: { bus_id: string; regNum: string; trip_id: string; route_id: string }[] = [];
+
+    // Filter buses that haven't sent a WebSocket update in the last 15 seconds
+    for (const [busId, busInfo] of this.activeBusUUIDs.entries()) {
+      const lastWsTime = this.lastSeenWebSocket.get(busInfo.regNum) || 0;
+      if (now - lastWsTime > 15000) {
+        quietBuses.push(busInfo);
+      }
+    }
+
+    if (quietBuses.length === 0) {
+      return;
+    }
+
     try {
       const token = await this.tokenProvider.getOrRefreshToken();
       const headers = {
@@ -114,42 +163,72 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
         Accept: 'application/json',
       };
 
-      for (const [busId, busInfo] of this.activeBusUUIDs.entries()) {
-        try {
-          const url = `https://lankametro.lk/metrobus-proxy/ticketing-service/api/v1/buses/${busId}/tracking`;
-          const resp = await axios.get(url, { headers, timeout: 3500 });
+      // Process quiet buses in chunked concurrency pools of 10
+      const chunkSize = 10;
+      for (let i = 0; i < quietBuses.length; i += chunkSize) {
+        const chunk = quietBuses.slice(i, i + chunkSize);
 
-          if (resp.status === 200 && resp.data?.data) {
-            const trackData = resp.data.data;
-            const loc = trackData.bus_location;
-            const status = trackData.status;
+        await Promise.all(
+          chunk.map(async (busInfo) => {
+            try {
+              const url = `https://lankametro.lk/metrobus-proxy/ticketing-service/api/v1/buses/${busInfo.bus_id}/tracking`;
+              const resp = await axios.get(url, { headers, timeout: 3500 });
 
-            if (loc && typeof loc.lat === 'number' && typeof loc.lng === 'number') {
-              const delayMins = parseFloat(trackData.delay_minutes || 0);
-              const delaySecs = Math.round(delayMins * 60);
+              if (resp.status === 200 && resp.data?.data) {
+                const trackData = resp.data.data;
+                const loc = trackData.bus_location;
 
-              this.logger.log(
-                `📱 [MOBILE APP TRACKING] Bus ${busInfo.regNum} (${busInfo.trip_id.slice(0, 10)}) Status: ${status} -> (${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}), Delay: ${delayMins}m`,
-              );
+                if (loc && typeof loc.lat === 'number' && typeof loc.lng === 'number') {
+                  const timestampMs = loc.recorded_at ? new Date(loc.recorded_at).getTime() : Date.now();
+                  const prevPos = this.lastPositionMap.get(busInfo.regNum);
 
-              // Publish real-time vehicle position
-              await this.publisher.publishVehiclePosition({
-                trip_id: busInfo.trip_id,
-                route_id: busInfo.route_id,
-                direction_id: 0,
-                vehicle_id: busInfo.regNum,
-                vehicle_label: busInfo.regNum,
-                license_plate: busInfo.regNum,
-                latitude: loc.lat,
-                longitude: loc.lng,
-                speed: 0,
-                bearing: 0,
-                timestamp: loc.recorded_at ? new Date(loc.recorded_at).toISOString() : new Date().toISOString(),
-              });
+                  let computedSpeed = 0;
+                  let computedBearing = 0;
+
+                  if (prevPos) {
+                    const distMeters = haversineMeters(prevPos.latitude, prevPos.longitude, loc.lat, loc.lng);
+                    const dtSec = (timestampMs - prevPos.timestamp) / 1000;
+                    if (dtSec > 0 && distMeters > 2) {
+                      computedSpeed = Math.round((distMeters / dtSec) * 3.6 * 10) / 10; // km/h
+                      computedBearing = calculateBearingDeg(prevPos.latitude, prevPos.longitude, loc.lat, loc.lng);
+                    } else {
+                      computedSpeed = prevPos.speed;
+                      computedBearing = prevPos.bearing;
+                    }
+                  }
+
+                  this.lastPositionMap.set(busInfo.regNum, {
+                    latitude: loc.lat,
+                    longitude: loc.lng,
+                    timestamp: timestampMs,
+                    speed: computedSpeed,
+                    bearing: computedBearing,
+                  });
+
+                  this.publisher.publishVehiclePosition({
+                    trip_id: busInfo.trip_id,
+                    route_id: busInfo.route_id,
+                    direction_id: 0,
+                    vehicle_id: busInfo.regNum,
+                    vehicle_label: busInfo.regNum,
+                    license_plate: busInfo.regNum,
+                    latitude: loc.lat,
+                    longitude: loc.lng,
+                    speed: computedSpeed,
+                    bearing: computedBearing,
+                    timestamp: new Date(timestampMs).toISOString(),
+                  });
+                }
+              }
+            } catch {
+              // Ignore individual quiet errors
             }
-          }
-        } catch {
-          // Ignore individual 400 (inactive session) or 404 responses quietly
+          }),
+        );
+
+        // 200ms stagger between chunks
+        if (i + chunkSize < quietBuses.length) {
+          await new Promise((r) => setTimeout(r, 200));
         }
       }
     } catch (err: any) {
@@ -257,6 +336,7 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
       if (eventType === 'gps_update' && rawPayload) {
         await this.refreshScheduleAssignmentsIfNeeded();
         const busList: any[] = Array.isArray(rawPayload) ? rawPayload : [rawPayload];
+        const now = Date.now();
 
         for (const bus of busList) {
           const regNum = bus.registration_number || bus.busReg || bus.vehicle_id || 'UNKNOWN_BUS';
@@ -264,10 +344,37 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
           const lng = parseFloat(bus.lng || bus.longitude);
 
           if (!isNaN(lat) && !isNaN(lng)) {
+            // Track last seen timestamp on WebSocket
+            this.lastSeenWebSocket.set(regNum, now);
+
             const assignment = this.assignmentMap.get(regNum);
             const tripId = assignment?.trip_id || (bus.route_id ? `TRIP_${bus.route_id.slice(0, 8)}` : `BUS_${regNum}`);
             const routeId = assignment?.route_id || bus.route_id || undefined;
             const dirInt = typeof bus.direction_id === 'number' ? bus.direction_id : (bus.direction_id ? parseInt(String(bus.direction_id), 10) || 0 : 0);
+
+            const timestampMs = typeof bus.timestamp === 'number' ? bus.timestamp : now;
+            const prevPos = this.lastPositionMap.get(regNum);
+
+            let speedKmh = isNaN(parseFloat(bus.speed)) ? 0 : parseFloat(bus.speed);
+            let bearingDeg = isNaN(parseFloat(bus.bearing || bus.heading)) ? 0 : parseFloat(bus.bearing || bus.heading);
+
+            // Compute speed and bearing if raw hardware values are zero or missing
+            if (prevPos && (speedKmh === 0 || bearingDeg === 0)) {
+              const distM = haversineMeters(prevPos.latitude, prevPos.longitude, lat, lng);
+              const dtS = (timestampMs - prevPos.timestamp) / 1000;
+              if (dtS > 0 && distM > 2) {
+                if (speedKmh === 0) speedKmh = Math.round((distM / dtS) * 3.6 * 10) / 10;
+                if (bearingDeg === 0) bearingDeg = calculateBearingDeg(prevPos.latitude, prevPos.longitude, lat, lng);
+              }
+            }
+
+            this.lastPositionMap.set(regNum, {
+              latitude: lat,
+              longitude: lng,
+              timestamp: timestampMs,
+              speed: speedKmh,
+              bearing: bearingDeg,
+            });
 
             this.publisher.publishVehiclePosition({
               trip_id: tripId,
@@ -278,9 +385,9 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
               license_plate: regNum,
               latitude: lat,
               longitude: lng,
-              speed: isNaN(parseFloat(bus.speed)) ? 0 : parseFloat(bus.speed),
-              bearing: isNaN(parseFloat(bus.bearing || bus.heading)) ? 0 : parseFloat(bus.bearing || bus.heading),
-              timestamp: new Date(typeof bus.timestamp === 'number' ? bus.timestamp : Date.now()).toISOString(),
+              speed: speedKmh,
+              bearing: bearingDeg,
+              timestamp: new Date(timestampMs).toISOString(),
             });
           }
         }
