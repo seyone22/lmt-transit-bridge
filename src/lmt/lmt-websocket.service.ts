@@ -39,7 +39,6 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
 
   private async refreshScheduleAssignmentsIfNeeded() {
     const now = Date.now();
-    // Cache assignments for 15 minutes
     if (now - this.lastAssignmentFetch < 15 * 60 * 1000 && this.assignmentMap.size > 0) {
       return;
     }
@@ -188,20 +187,21 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
           if (!isNaN(lat) && !isNaN(lng)) {
             const assignment = this.assignmentMap.get(regNum);
             const tripId = assignment?.trip_id || (bus.route_id ? `TRIP_${bus.route_id.slice(0, 8)}` : `BUS_${regNum}`);
-            const speed = parseFloat(bus.speed || 0);
-            const bearing = parseFloat(bus.bearing || bus.heading || 0);
-            const tsMs = typeof bus.timestamp === 'number' ? bus.timestamp : Date.now();
+            const routeId = assignment?.route_id || bus.route_id || undefined;
+            const dirInt = typeof bus.direction_id === 'number' ? bus.direction_id : (bus.direction_id ? parseInt(String(bus.direction_id), 10) || 0 : 0);
 
             this.publisher.publishVehiclePosition({
               trip_id: tripId,
+              route_id: routeId,
+              direction_id: dirInt,
               vehicle_id: regNum,
               vehicle_label: regNum,
               license_plate: regNum,
               latitude: lat,
               longitude: lng,
-              speed: isNaN(speed) ? 0 : speed,
-              bearing: isNaN(bearing) ? 0 : bearing,
-              timestamp: new Date(tsMs).toISOString(),
+              speed: isNaN(parseFloat(bus.speed)) ? 0 : parseFloat(bus.speed),
+              bearing: isNaN(parseFloat(bus.bearing || bus.heading)) ? 0 : parseFloat(bus.bearing || bus.heading),
+              timestamp: new Date(typeof bus.timestamp === 'number' ? bus.timestamp : Date.now()).toISOString(),
             });
           }
         }
