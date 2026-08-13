@@ -7,6 +7,7 @@ import { TokenProviderService } from '../auth/token-provider.service';
 interface ScheduleAssignment {
   trip_id: string;
   route_id: string;
+  bus_id: string;
 }
 
 @Injectable()
@@ -14,10 +15,12 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(LmtWebsocketService.name);
   private ws: WebSocket | null = null;
   private pingInterval: NodeJS.Timeout | null = null;
+  private pollInterval: NodeJS.Timeout | null = null;
   private reconnectTimeout: NodeJS.Timeout | null = null;
   private isConnected = false;
 
   private assignmentMap = new Map<string, ScheduleAssignment>();
+  private activeBusUUIDs = new Map<string, { bus_id: string; regNum: string; trip_id: string; route_id: string }>();
   private lastAssignmentFetch = 0;
 
   constructor(
@@ -27,6 +30,7 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     this.connect();
+    this.startMobileTrackingPolling();
   }
 
   onModuleDestroy() {
@@ -52,6 +56,8 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
         'f3eaf277-a6fa-4f5b-8a61-3b1758d9a4b8',
       ];
 
+      this.activeBusUUIDs.clear();
+
       for (const routeId of routeIds) {
         const resp = await axios.get(
           `https://lankametro.lk/metrobus-proxy/ticketing-service/api/v1/bus-schedule-assignments/daily-schedule?date=${todayStr}&route_id=${routeId}`,
@@ -62,9 +68,17 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
           const slots = sched.slots || [];
           for (const slot of slots) {
             const regNum = slot.bus?.registration_number;
+            const busId = slot.bus?.bus_id;
             const tripId = String(slot.slot_id || `TRIP_${sched.code}_${slot.slot_number}`);
-            if (regNum) {
+            if (regNum && busId) {
               this.assignmentMap.set(regNum, {
+                trip_id: tripId,
+                route_id: routeId,
+                bus_id: busId,
+              });
+              this.activeBusUUIDs.set(busId, {
+                bus_id: busId,
+                regNum,
                 trip_id: tripId,
                 route_id: routeId,
               });
@@ -73,9 +87,73 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
         }
       }
       this.lastAssignmentFetch = now;
-      this.logger.log(`✅ Refreshed ${this.assignmentMap.size} bus schedule assignments from LMT Go.`);
+      this.logger.log(`✅ Refreshed ${this.assignmentMap.size} bus schedule assignments & ${this.activeBusUUIDs.size} active bus UUIDs.`);
     } catch (err: any) {
       this.logger.warn(`Could not refresh schedule assignments: ${err.message}`);
+    }
+  }
+
+  private startMobileTrackingPolling() {
+    if (this.pollInterval) clearInterval(this.pollInterval);
+
+    // Poll Mobile App tracking endpoint every 10 seconds
+    this.pollInterval = setInterval(async () => {
+      await this.pollMobileAppBusTracking();
+    }, 10000);
+  }
+
+  private async pollMobileAppBusTracking() {
+    await this.refreshScheduleAssignmentsIfNeeded();
+    if (this.activeBusUUIDs.size === 0) return;
+
+    try {
+      const token = await this.tokenProvider.getOrRefreshToken();
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        'User-Agent': 'okhttp/4.10.0',
+        Accept: 'application/json',
+      };
+
+      for (const [busId, busInfo] of this.activeBusUUIDs.entries()) {
+        try {
+          const url = `https://lankametro.lk/metrobus-proxy/ticketing-service/api/v1/buses/${busId}/tracking`;
+          const resp = await axios.get(url, { headers, timeout: 4000 });
+
+          if (resp.status === 200 && resp.data?.data) {
+            const trackData = resp.data.data;
+            const loc = trackData.bus_location;
+            const status = trackData.status;
+
+            if (loc && typeof loc.lat === 'number' && typeof loc.lng === 'number') {
+              const delayMins = parseFloat(trackData.delay_minutes || 0);
+              const delaySecs = Math.round(delayMins * 60);
+
+              this.logger.log(
+                `📱 [MOBILE APP TRACKING] Bus ${busInfo.regNum} (${busInfo.trip_id.slice(0, 10)}) Status: ${status} -> (${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}), Delay: ${delayMins}m`,
+              );
+
+              // Publish real-time vehicle position
+              await this.publisher.publishVehiclePosition({
+                trip_id: busInfo.trip_id,
+                route_id: busInfo.route_id,
+                direction_id: 0,
+                vehicle_id: busInfo.regNum,
+                vehicle_label: busInfo.regNum,
+                license_plate: busInfo.regNum,
+                latitude: loc.lat,
+                longitude: loc.lng,
+                speed: 0,
+                bearing: 0,
+                timestamp: loc.recorded_at ? new Date(loc.recorded_at).toISOString() : new Date().toISOString(),
+              });
+            }
+          }
+        } catch {
+          // Ignore individual 400 (inactive session) or 404 responses quietly
+        }
+      }
+    } catch (err: any) {
+      this.logger.warn(`Mobile tracking polling error: ${err.message}`);
     }
   }
 
@@ -157,6 +235,7 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
 
   private disconnect() {
     this.stopHeartbeat();
+    if (this.pollInterval) clearInterval(this.pollInterval);
     if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
     if (this.ws) {
       this.ws.removeAllListeners();
