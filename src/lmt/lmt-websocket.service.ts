@@ -205,9 +205,16 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
                   if (prevPos) {
                     const distMeters = haversineMeters(prevPos.latitude, prevPos.longitude, loc.lat, loc.lng);
                     const dtSec = (timestampMs - prevPos.timestamp) / 1000;
-                    if (dtSec > 0 && distMeters > 2) {
-                      computedSpeed = Math.round((distMeters / dtSec) * 3.6 * 10) / 10; // km/h
-                      computedBearing = calculateBearingDeg(prevPos.latitude, prevPos.longitude, loc.lat, loc.lng);
+
+                    if (dtSec > 0) {
+                      if (distMeters > 5.0) {
+                        computedSpeed = Math.round((distMeters / dtSec) * 3.6 * 10) / 10; // km/h
+                        computedBearing = calculateBearingDeg(prevPos.latitude, prevPos.longitude, loc.lat, loc.lng);
+                      } else {
+                        // Vehicle is stationary or moving less than 5m
+                        computedSpeed = 0;
+                        computedBearing = prevPos.bearing; // Keep stable previous heading
+                      }
                     } else {
                       computedSpeed = prevPos.speed;
                       computedBearing = prevPos.bearing;
