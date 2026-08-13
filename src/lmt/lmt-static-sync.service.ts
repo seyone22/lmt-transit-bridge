@@ -227,26 +227,36 @@ export class LmtStaticSyncService implements OnModuleInit {
       }
       this.logger.log(`✅ Ingested ${parentStationMap.size} parent station hubs and ${stopsMap.size} platform stops.`);
 
-      // 5. Ingest GTFS Fare Attributes & Fare Rules
-      await this.publisher.publishFareAttribute({
-        fare_id: 'FARE_EXPRESS',
-        price: 100.0,
-        currency_type: 'LKR',
-        payment_method: 0, // Pay on board / POS validator
-        transfers: 0,
-        transfer_duration: 0,
-      });
+      // 5. Ingest Authentic Distance-Based GTFS Fare Attributes & Rules
+      const fareStages = [
+        { id: 'FARE_STAGE_1_LOCAL', price: 65.0, desc: 'Short Local Hop (65 LKR)' },
+        { id: 'FARE_STAGE_2_SHORT', price: 85.0, desc: 'Short Corridor Stage (85 LKR)' },
+        { id: 'FARE_STAGE_3_MEDIUM', price: 110.0, desc: 'Medium Corridor Stage (110 LKR)' },
+        { id: 'FARE_STAGE_4_LONG', price: 225.0, desc: 'Long Express Stage (225 LKR)' },
+        { id: 'FARE_STAGE_5_FULL', price: 255.0, desc: 'Full Corridor Express (255 LKR)' },
+      ];
 
-      await this.publisher.publishFareRule({
-        fare_id: 'FARE_EXPRESS',
-        route_id: '8bc594e3-8ad6-4a0d-9138-bf8b4247e2f5', // CM01
-      });
+      for (const stage of fareStages) {
+        await this.publisher.publishFareAttribute({
+          fare_id: stage.id,
+          price: stage.price,
+          currency_type: 'LKR',
+          payment_method: 0, // Pay on board / POS validator
+          transfers: 0,
+          transfer_duration: 0,
+        });
 
-      await this.publisher.publishFareRule({
-        fare_id: 'FARE_EXPRESS',
-        route_id: 'f3eaf277-a6fa-4f5b-8a61-3b1758d9a4b8', // CM02
-      });
-      this.logger.log('✅ GTFS Fare Attributes (LKR 100.00 Express Fare) & Fare Rules ingested.');
+        await this.publisher.publishFareRule({
+          fare_id: stage.id,
+          route_id: '8bc594e3-8ad6-4a0d-9138-bf8b4247e2f5', // CM01
+        });
+
+        await this.publisher.publishFareRule({
+          fare_id: stage.id,
+          route_id: 'f3eaf277-a6fa-4f5b-8a61-3b1758d9a4b8', // CM02
+        });
+      }
+      this.logger.log('✅ Authentic Distance-Based GTFS Fare Stages (65 - 255 LKR) ingested.');
 
       // 6. Sync Service Alerts & Advisories
       await this.syncNotificationsAndAlerts();
