@@ -1,7 +1,13 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import WebSocket from 'ws';
+import axios from 'axios';
 import { GtfsRealtimePublisherService } from '../publisher/gtfs-realtime-publisher.service';
 import { TokenProviderService } from '../auth/token-provider.service';
+
+interface ScheduleAssignment {
+  trip_id: string;
+  route_id: string;
+}
 
 @Injectable()
 export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
@@ -10,6 +16,9 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
   private pingInterval: NodeJS.Timeout | null = null;
   private reconnectTimeout: NodeJS.Timeout | null = null;
   private isConnected = false;
+
+  private assignmentMap = new Map<string, ScheduleAssignment>();
+  private lastAssignmentFetch = 0;
 
   constructor(
     private readonly publisher: GtfsRealtimePublisherService,
@@ -26,6 +35,49 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
 
   public getIsConnected(): boolean {
     return this.isConnected;
+  }
+
+  private async refreshScheduleAssignmentsIfNeeded() {
+    const now = Date.now();
+    // Cache assignments for 15 minutes
+    if (now - this.lastAssignmentFetch < 15 * 60 * 1000 && this.assignmentMap.size > 0) {
+      return;
+    }
+
+    try {
+      const token = await this.tokenProvider.getOrRefreshToken();
+      const headers = { Authorization: `Bearer ${token}` };
+      const todayStr = new Date().toISOString().split('T')[0];
+      const routeIds = [
+        '8bc594e3-8ad6-4a0d-9138-bf8b4247e2f5',
+        'f3eaf277-a6fa-4f5b-8a61-3b1758d9a4b8',
+      ];
+
+      for (const routeId of routeIds) {
+        const resp = await axios.get(
+          `https://lankametro.lk/metrobus-proxy/ticketing-service/api/v1/bus-schedule-assignments/daily-schedule?date=${todayStr}&route_id=${routeId}`,
+          { headers, timeout: 5000 },
+        );
+        const schedules = resp.data?.data?.schedules || [];
+        for (const sched of schedules) {
+          const slots = sched.slots || [];
+          for (const slot of slots) {
+            const regNum = slot.bus?.registration_number;
+            const tripId = String(slot.slot_id || `TRIP_${sched.code}_${slot.slot_number}`);
+            if (regNum) {
+              this.assignmentMap.set(regNum, {
+                trip_id: tripId,
+                route_id: routeId,
+              });
+            }
+          }
+        }
+      }
+      this.lastAssignmentFetch = now;
+      this.logger.log(`✅ Refreshed ${this.assignmentMap.size} bus schedule assignments from LMT Go.`);
+    } catch (err: any) {
+      this.logger.warn(`Could not refresh schedule assignments: ${err.message}`);
+    }
   }
 
   private async connect(forceTokenRefresh = false) {
@@ -55,6 +107,7 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
         this.logger.log('⚡ Connected successfully to SmartMetro WebSocket stream!');
         this.isConnected = true;
         this.startHeartbeat();
+        this.refreshScheduleAssignmentsIfNeeded().catch(() => {});
       });
 
       this.ws.on('message', (data: WebSocket.RawData) => {
@@ -70,7 +123,6 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
         this.isConnected = false;
         this.stopHeartbeat();
 
-        // If closed with 401 / 1006 auth failure, force token refresh on reconnect
         const isAuthError = code === 401 || code === 1006 || reason.toString().includes('401');
         this.scheduleReconnect(5000, isAuthError);
       });
@@ -115,7 +167,7 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
     this.isConnected = false;
   }
 
-  private handleMessage(rawData: WebSocket.RawData) {
+  private async handleMessage(rawData: WebSocket.RawData) {
     try {
       const text = rawData.toString();
       if (!text || text.trim() === '') return;
@@ -125,6 +177,7 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
       const rawPayload = messageObj.payload || messageObj.data;
 
       if (eventType === 'gps_update' && rawPayload) {
+        await this.refreshScheduleAssignmentsIfNeeded();
         const busList: any[] = Array.isArray(rawPayload) ? rawPayload : [rawPayload];
 
         for (const bus of busList) {
@@ -133,7 +186,8 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
           const lng = parseFloat(bus.lng || bus.longitude);
 
           if (!isNaN(lat) && !isNaN(lng)) {
-            const tripId = bus.route_id ? `TRIP_${bus.route_id.slice(0, 8)}` : `BUS_${regNum}`;
+            const assignment = this.assignmentMap.get(regNum);
+            const tripId = assignment?.trip_id || (bus.route_id ? `TRIP_${bus.route_id.slice(0, 8)}` : `BUS_${regNum}`);
             const speed = parseFloat(bus.speed || 0);
             const bearing = parseFloat(bus.bearing || bus.heading || 0);
             const tsMs = typeof bus.timestamp === 'number' ? bus.timestamp : Date.now();
