@@ -1,33 +1,22 @@
 const { chromium } = require('playwright');
 
 (async () => {
-  console.log("Sniffing ALL HTTP requests on lankametro.lk...");
+  console.log("Sniffing exact LMT Go headers and token...");
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
 
   page.on('request', req => {
-    console.log(`[REQ] ${req.method()} ${req.url()}`);
-    if (req.method() === 'POST') {
-      console.log(`  POST Payload: ${req.postData()}`);
-    }
-  });
-
-  page.on('response', async resp => {
-    const url = resp.url();
-    if (url.includes('api') || url.includes('auth') || url.includes('token') || url.includes('user')) {
-      console.log(`[RESP ${resp.status()}] ${url}`);
-      try {
-        const text = await resp.text();
-        if (text.includes('token') || text.includes('eyJ')) {
-          console.log(`  TOKEN IN RESPONSE: ${text.slice(0, 400)}`);
-        }
-      } catch (e) {}
+    const url = req.url();
+    if (url.includes('metrobus-proxy') || url.includes('api')) {
+      console.log(`\n[REQ] ${req.method()} ${url}`);
+      console.log('Headers:', JSON.stringify(req.headers(), null, 2));
     }
   });
 
   try {
     await page.goto('https://lankametro.lk/en/smartmetro', { waitUntil: 'networkidle' });
+    await page.waitForTimeout(5000);
   } catch (err) {
     console.error("Error:", err.message);
   } finally {

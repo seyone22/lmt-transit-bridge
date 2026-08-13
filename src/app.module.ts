@@ -8,6 +8,8 @@ import { GtfsStaticSyncService } from './sync/gtfs-static-sync.service';
 import { HealthController } from './health/health.controller';
 import { SyncController } from './sync/sync.controller';
 
+import { LmtStaticSyncService } from './lmt/lmt-static-sync.service';
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -16,6 +18,7 @@ import { SyncController } from './sync/sync.controller';
   controllers: [HealthController, SyncController],
   providers: [
     LmtWebsocketService,
+    LmtStaticSyncService,
     GtfsRealtimePublisherService,
     TokenProviderService,
     GtfsStaticSyncService,
