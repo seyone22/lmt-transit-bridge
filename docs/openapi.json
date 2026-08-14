@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Lanka Metro Transit (LMT Go) Reverse-Engineered Upstream API",
-    "description": "Master OpenAPI 3.0 specification of all reverse-engineered upstream microservices, WebSocket streams, ticketing/POS transactions, and static artwork storage buckets for Lanka Metro Transit (Eimsky / NTC / HNB). Maintains automated health validation.",
-    "version": "1.1.0",
+    "description": "Master OpenAPI 3.0 specification of all reverse-engineered upstream microservices, WebSocket streams, ticketing/POS transactions, live stop ETAs, and static artwork storage buckets for Lanka Metro Transit (Eimsky / NTC / HNB).",
+    "version": "1.2.0",
     "contact": {
       "name": "SLR & LMT Open Transit Engine",
       "url": "https://github.com/seyone22/lmt-transit-bridge"
@@ -36,7 +36,7 @@
           "payment_type": { "type": "string", "example": "card" },
           "card_type": { "type": "string", "enum": ["MASTERCARD", "VISA"], "example": "MASTERCARD" },
           "card_number": { "type": "string", "example": "5269 27** **** 3220" },
-          "card_input_mode": { "type": "string", "description": "CL = Contactless NFC, MS = Magnetic Stripe, ICC = Chip", "example": "CL" },
+          "card_input_mode": { "type": "string", "description": "CL = Contactless NFC, MS = Magstripe, ICC = Chip", "example": "CL" },
           "invoice": { "type": "string", "example": "005480" },
           "rrn": { "type": "string", "description": "Bank Retrieval Reference Number", "example": "395421432843" },
           "auth_code": { "type": "string", "description": "Bank Authorization Approval Code", "example": "171656" },
@@ -84,6 +84,70 @@
           "conductor_first_name": { "type": "string", "example": "NE5231" },
           "driver_id": { "type": "string", "format": "uuid" }
         }
+      },
+      "BusTracking": {
+        "type": "object",
+        "description": "Real-Time Bus Location, Segment Progress & Stop ETAs Payload",
+        "properties": {
+          "bus_id": { "type": "string", "format": "uuid" },
+          "route_id": { "type": "string", "format": "uuid" },
+          "direction_id": { "type": "string", "format": "uuid" },
+          "start_location": { "type": "string", "example": "Makumbura" },
+          "end_location": { "type": "string", "example": "Colombo" },
+          "status": { "type": "string", "enum": ["in_transit", "waiting", "idle"], "example": "in_transit" },
+          "current_segment": {
+            "type": "object",
+            "properties": {
+              "from_stop": {
+                "type": "object",
+                "properties": {
+                  "stop_id": { "type": "string" },
+                  "stop_name": { "type": "string", "example": "Kottawa" },
+                  "stop_code": { "type": "string", "example": "MCC67" },
+                  "sequence_number": { "type": "integer", "example": 19 }
+                }
+              },
+              "to_stop": {
+                "type": "object",
+                "properties": {
+                  "stop_id": { "type": "string" },
+                  "stop_name": { "type": "string", "example": "Makumbura" },
+                  "stop_code": { "type": "string", "example": "MCC62" },
+                  "sequence_number": { "type": "integer", "example": 20 }
+                }
+              },
+              "fraction_covered": { "type": "number", "description": "Interpolated segment completion ratio (0.0 to 1.0)", "example": 0.95 }
+            }
+          },
+          "bus_location": {
+            "type": "object",
+            "properties": {
+              "lat": { "type": "number", "example": 6.84215483 },
+              "lng": { "type": "number", "example": 79.96251072 },
+              "recorded_at": { "type": "string", "format": "date-time" },
+              "is_stale": { "type": "boolean", "example": false }
+            }
+          },
+          "delay_minutes": { "type": "number", "description": "Negative value indicates operating ahead of schedule", "example": -20.5 },
+          "has_timing_data": { "type": "boolean", "example": true },
+          "stops": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "stop_id": { "type": "string" },
+                "stop_name": { "type": "string", "example": "Makumbura" },
+                "stop_code": { "type": "string", "example": "MCC62" },
+                "sequence_number": { "type": "integer", "example": 20 },
+                "scheduled_arrival": { "type": "string", "format": "date-time" },
+                "estimated_arrival": { "type": "string", "format": "date-time" },
+                "delay_minutes": { "type": "number", "example": -20.5 },
+                "minutes_to_arrival": { "type": "number", "example": 5.0 },
+                "is_next_stop": { "type": "boolean", "example": true }
+              }
+            }
+          }
+        }
       }
     }
   },
@@ -98,9 +162,7 @@
         "summary": "Fetch Broadcast Service Alerts & Public Notifications",
         "description": "Returns active service announcements, route updates, and broadcast notifications for the LMT Go Mobile App.",
         "responses": {
-          "200": {
-            "description": "Active notifications array"
-          }
+          "200": { "description": "Active notifications array" }
         }
       }
     },
@@ -117,9 +179,7 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "User accounts directory array"
-          }
+          "200": { "description": "User accounts directory array" }
         }
       }
     },
@@ -128,16 +188,14 @@
         "summary": "Fetch Master Fleet Register (All Operating Buses)",
         "description": "Returns full master bus register including manufacturer (Foton C12), seating capacity (35), standing capacity (45), fleet numbers, and UUIDs.",
         "responses": {
-          "200": {
-            "description": "Master bus array"
-          }
+          "200": { "description": "Master bus array" }
         }
       }
     },
     "/ticketing-service/api/v1/buses/{bus_id}/tracking": {
       "get": {
-        "summary": "Fetch Real-Time Mobile App Bus Tracking & Delay",
-        "description": "Returns real-time GPS position (lat, lng, recorded_at), current segment, delay_minutes, and stop ETAs for a specific bus UUID.",
+        "summary": "Fetch Real-Time Mobile App Bus Tracking, Segment Progress & Stop ETAs",
+        "description": "Returns real-time GPS position (lat, lng, recorded_at), current_segment (from_stop, to_stop, fraction_covered), delay_minutes, and stop-by-stop ETAs (minutes_to_arrival, is_next_stop) for a specific bus UUID.",
         "parameters": [
           {
             "name": "bus_id",
@@ -148,7 +206,17 @@
         ],
         "responses": {
           "200": {
-            "description": "Real-time bus tracking payload"
+            "description": "Real-time bus tracking and ETA object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": { "$ref": "#/components/schemas/BusTracking" }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -166,9 +234,7 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Bus crew and route assignment object"
-          }
+          "200": { "description": "Bus crew and route assignment object" }
         }
       }
     },
@@ -177,9 +243,7 @@
         "summary": "Fetch Active Schedule Assignments Across Fleet",
         "description": "Returns all long-range bus schedule assignments linking bus UUIDs, route IDs, and active daily schedule slots.",
         "responses": {
-          "200": {
-            "description": "Active schedule assignments array"
-          }
+          "200": { "description": "Active schedule assignments array" }
         }
       }
     },
@@ -188,9 +252,7 @@
         "summary": "Fetch Master Hardware Validator Register (50 Devices)",
         "description": "Returns full hardware register of Aiken T16 handheld POS thermal printers and optical QR door turnstile scanners.",
         "responses": {
-          "200": {
-            "description": "POS & validator hardware devices array"
-          }
+          "200": { "description": "POS & validator hardware devices array" }
         }
       }
     },
@@ -228,9 +290,7 @@
         "summary": "Fetch Bus Corridor Routes & Directions",
         "description": "Returns master routes (CM01, CM02), route colors, and direction UUIDs.",
         "responses": {
-          "200": {
-            "description": "Routes array"
-          }
+          "200": { "description": "Routes array" }
         }
       }
     },
@@ -253,9 +313,7 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Ordered directional stops array"
-          }
+          "200": { "description": "Ordered directional stops array" }
         }
       }
     },
