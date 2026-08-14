@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Lanka Metro Transit (LMT Go) Reverse-Engineered Upstream API",
-    "description": "Master OpenAPI 3.0 specification of all reverse-engineered upstream microservices, WebSocket streams, and static artwork storage buckets for Lanka Metro Transit (Eimsky / NTC / HNB). Maintains automated weekly health validation.",
-    "version": "1.0.0",
+    "description": "Master OpenAPI 3.0 specification of all reverse-engineered upstream microservices, WebSocket streams, ticketing/POS transactions, and static artwork storage buckets for Lanka Metro Transit (Eimsky / NTC / HNB). Maintains automated health validation.",
+    "version": "1.1.0",
     "contact": {
       "name": "SLR & LMT Open Transit Engine",
       "url": "https://github.com/seyone22/lmt-transit-bridge"
@@ -25,7 +25,65 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "JWT",
-        "description": "EdDSA signed JWT token obtained via user-service auth endpoint."
+        "description": "EdDSA signed JWT token obtained via user-service auth endpoint or Next.js RSC chunk graph."
+      }
+    },
+    "schemas": {
+      "CardPaymentDetails": {
+        "type": "object",
+        "description": "cEMV / Contactless Card POS Transaction Metadata",
+        "properties": {
+          "payment_type": { "type": "string", "example": "card" },
+          "card_type": { "type": "string", "enum": ["MASTERCARD", "VISA"], "example": "MASTERCARD" },
+          "card_number": { "type": "string", "example": "5269 27** **** 3220" },
+          "card_input_mode": { "type": "string", "description": "CL = Contactless NFC, MS = Magnetic Stripe, ICC = Chip", "example": "CL" },
+          "invoice": { "type": "string", "example": "005480" },
+          "rrn": { "type": "string", "description": "Bank Retrieval Reference Number", "example": "395421432843" },
+          "auth_code": { "type": "string", "description": "Bank Authorization Approval Code", "example": "171656" },
+          "merchant_id": { "type": "string", "example": "000000060209003" },
+          "terminal_id": { "type": "string", "example": "20505690" },
+          "transaction_ref": { "type": "string", "example": "35094916" }
+        }
+      },
+      "Ticket": {
+        "type": "object",
+        "description": "Passenger Ticket Sales Record",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "ticket_number": { "type": "string", "example": "1474-0674-2363" },
+          "session_id": { "type": "string", "format": "uuid" },
+          "session_pos_reference_id": { "type": "string", "format": "uuid" },
+          "session_number": { "type": "integer", "example": 2 },
+          "status": { "type": "string", "enum": ["issued", "cancelled", "refunded"], "example": "issued" },
+          "ticket_type": { "type": "string", "example": "passenger" },
+          "fare_amount": { "type": "number", "example": 160.0 },
+          "full_passengers": { "type": "integer", "example": 1 },
+          "half_passengers": { "type": "integer", "example": 0 },
+          "full_fare_amount": { "type": "number", "example": 160.0 },
+          "half_fare_amount": { "type": "number", "example": 0.0 },
+          "discount_amount": { "type": "number", "example": 0.0 },
+          "is_reprint": { "type": "integer", "example": 0 },
+          "payment_method": { "type": "string", "enum": ["cash", "card"], "example": "card" },
+          "card_payment_details": { "$ref": "#/components/schemas/CardPaymentDetails" },
+          "issued_at": { "type": "string", "format": "date-time" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "route_id": { "type": "string", "format": "uuid" },
+          "route_code": { "type": "string", "example": "CM01" },
+          "route_name": { "type": "string", "example": "Makumbura - Kadawatha" },
+          "direction_id": { "type": "string", "format": "uuid" },
+          "direction_start_location": { "type": "string", "example": "Kadawatha" },
+          "direction_end_location": { "type": "string", "example": "Makumbura" },
+          "boarding_stop_id": { "type": "string", "format": "uuid" },
+          "boarding_stop_name": { "type": "string", "example": "Delkanda Junction" },
+          "alighting_stop_id": { "type": "string", "format": "uuid" },
+          "alighting_stop_name": { "type": "string", "example": "Kottawa" },
+          "bus_id": { "type": "string", "format": "uuid" },
+          "bus_registration_number": { "type": "string", "example": "WP-NE-5231" },
+          "trip_id": { "type": "string", "format": "uuid" },
+          "conductor_id": { "type": "string", "format": "uuid" },
+          "conductor_first_name": { "type": "string", "example": "NE5231" },
+          "driver_id": { "type": "string", "format": "uuid" }
+        }
       }
     }
   },
@@ -41,24 +99,7 @@
         "description": "Returns active service announcements, route updates, and broadcast notifications for the LMT Go Mobile App.",
         "responses": {
           "200": {
-            "description": "Active notifications array",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "type": "object",
-                      "properties": {
-                        "items": { "type": "array", "items": { "type": "object" } },
-                        "has_more": { "type": "boolean" },
-                        "count": { "type": "integer" }
-                      }
-                    }
-                  }
-                }
-              }
-            }
+            "description": "Active notifications array"
           }
         }
       }
@@ -84,7 +125,7 @@
     },
     "/ticketing-service/api/v1/buses": {
       "get": {
-        "summary": "Fetch Master Fleet Register (All 10 Operating Buses)",
+        "summary": "Fetch Master Fleet Register (All Operating Buses)",
         "description": "Returns full master bus register including manufacturer (Foton C12), seating capacity (35), standing capacity (45), fleet numbers, and UUIDs.",
         "responses": {
           "200": {
@@ -155,11 +196,29 @@
     },
     "/ticketing-service/api/v1/tickets": {
       "get": {
-        "summary": "Fetch Live Issued Passenger Tickets",
-        "description": "Returns live ticket sales transaction log including fare amounts, boarding stop IDs, and alighting stop IDs.",
+        "summary": "Fetch Live Issued Passenger Tickets & POS Card Details",
+        "description": "Returns live ticket sales transaction log including fare amounts, boarding stop IDs, alighting stop IDs, and complete card_payment_details (MasterCard/VISA, POS Ref, RRN, Auth Code).",
         "responses": {
           "200": {
-            "description": "Live passenger tickets array"
+            "description": "Live passenger tickets array",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": { "$ref": "#/components/schemas/Ticket" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
