@@ -77,9 +77,12 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
 
   private async refreshScheduleAssignmentsIfNeeded() {
     const now = Date.now();
-    if (now - this.lastAssignmentFetch < 15 * 60 * 1000 && this.assignmentMap.size > 0) {
+    // 15-minute success cooldown, 5-minute failure cooldown to prevent 5-second polling loops
+    const cooldownMs = this.assignmentMap.size > 0 ? 15 * 60 * 1000 : 5 * 60 * 1000;
+    if (now - this.lastAssignmentFetch < cooldownMs) {
       return;
     }
+    this.lastAssignmentFetch = now;
 
     try {
       const token = await this.tokenProvider.getOrRefreshToken();
@@ -137,7 +140,6 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
         // quiet fallback
       }
 
-      this.lastAssignmentFetch = now;
       this.logger.log(`✅ Refreshed ${this.assignmentMap.size} bus schedule assignments & ${this.activeBusUUIDs.size} active bus UUIDs.`);
     } catch (err: any) {
       this.logger.warn(`Could not refresh schedule assignments: ${err.message}`);
@@ -147,10 +149,10 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
   private startMobileTrackingPolling() {
     if (this.pollInterval) clearInterval(this.pollInterval);
 
-    // Delta Polling Loop: Check every 5 seconds, but ONLY poll buses quiet on WebSocket (> 15s)
+    // Delta Polling Loop: Check every 25 seconds, ONLY polling buses quiet on WebSocket (> 30s)
     this.pollInterval = setInterval(async () => {
       await this.pollMobileAppBusTracking();
-    }, 5000);
+    }, 25000);
   }
 
   private async pollMobileAppBusTracking() {
@@ -160,10 +162,10 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
     const now = Date.now();
     const quietBuses: { bus_id: string; regNum: string; trip_id: string; route_id: string }[] = [];
 
-    // Filter buses that haven't sent a WebSocket update in the last 15 seconds
+    // Filter buses that haven't sent a WebSocket update in the last 30 seconds
     for (const [busId, busInfo] of this.activeBusUUIDs.entries()) {
       const lastWsTime = this.lastSeenWebSocket.get(busInfo.regNum) || 0;
-      if (now - lastWsTime > 15000) {
+      if (now - lastWsTime > 30000) {
         quietBuses.push(busInfo);
       }
     }

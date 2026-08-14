@@ -14,9 +14,10 @@ export class LmtStaticSyncService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
-    this.logger.log('🚀 Initializing Master LMT Ingestion Engine in Bridge...');
-    this.syncStaticGtfsScheduleData().catch((err) => {
-      this.logger.error(`Initial static GTFS sync error: ${err.message}`);
+    this.logger.log('🚀 Initializing LMT Bridge Ingestion Engine...');
+    // Sync notifications/alerts lightweight on startup
+    this.syncNotificationsAndAlerts().catch((err) => {
+      this.logger.warn(`Startup alerts sync warning: ${err.message}`);
     });
   }
 

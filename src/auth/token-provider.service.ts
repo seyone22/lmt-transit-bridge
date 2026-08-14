@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
-import { chromium } from 'playwright';
 
 @Injectable()
 export class TokenProviderService {
@@ -10,8 +9,8 @@ export class TokenProviderService {
 
   /**
    * Retrieves a valid JWT token. Uses in-memory cache if valid.
-   * If expired or forceRefresh is true, tries Strategy 2 (Direct HTTP) first,
-   * then falls back to Strategy 1 (Playwright Headless Browser).
+   * If expired or forceRefresh is true, dynamically fetches fresh token from LMT Go
+   * via lightweight HTTP Next.js chunk graph traversal (no Playwright, no hardcoded secrets).
    */
   async getOrRefreshToken(forceRefresh = false): Promise<string> {
     const nowSec = Math.floor(Date.now() / 1000);
@@ -21,115 +20,91 @@ export class TokenProviderService {
       return this.cachedToken;
     }
 
-    this.logger.log('Token expired or refresh requested. Attempting Strategy 2 (Direct API Hook)...');
+    this.logger.log('Token expired or refresh requested. Resolving fresh live JWT from LMT Go via HTTP...');
 
-    // Strategy 2: Direct HTTP Guest Auth Hook
     try {
-      const tokenFromApi = await this.tryDirectApiHook();
-      if (tokenFromApi) {
-        this.updateCachedToken(tokenFromApi);
-        this.logger.log('✅ Strategy 2 Success: Obtained fresh JWT via Direct API Hook.');
-        return tokenFromApi;
+      const freshToken = await this.fetchFreshTokenViaHttp();
+      if (freshToken) {
+        this.updateCachedToken(freshToken);
+        this.logger.log('✅ Success: Resolved fresh live JWT from LMT Go via HTTP chunk graph.');
+        return freshToken;
       }
     } catch (err: any) {
-      this.logger.warn(`Strategy 2 (Direct API Hook) failed: ${err.message}`);
+      this.logger.error(`HTTP fresh token resolution failed: ${err.message}`);
     }
 
-    // Strategy 1: Headless Playwright Auto-Auth Fallback
-    this.logger.log('⚠️ Falling back to Strategy 1 (Playwright Headless Auto-Auth)...');
-    try {
-      const tokenFromBrowser = await this.tryPlaywrightAutoAuth();
-      if (tokenFromBrowser) {
-        this.updateCachedToken(tokenFromBrowser);
-        this.logger.log('⚡ Strategy 1 Success: Intercepted fresh JWT via Playwright browser session.');
-        return tokenFromBrowser;
-      }
-    } catch (err: any) {
-      this.logger.error(`Strategy 1 (Playwright Auto-Auth) failed: ${err.message}`);
+    if (this.cachedToken && this.tokenExpiresAt > nowSec) {
+      this.logger.warn('Falling back to currently cached token despite refresh attempt.');
+      return this.cachedToken;
     }
 
-    // Ultimate fallback: Use env var or last known token
-    const fallbackToken = process.env.LMT_WS_TOKEN || '';
-    if (fallbackToken) {
-      this.logger.warn('Using fallback environment variable LMT_WS_TOKEN.');
-      this.updateCachedToken(fallbackToken);
-      return fallbackToken;
-    }
-
-    throw new Error('All token refresh strategies (Direct API, Playwright, Fallback Env) failed.');
+    throw new Error('Failed to resolve fresh JWT token from LMT Go upstream service.');
   }
 
   /**
-   * Strategy 2: Direct API Hook
+   * Dynamically extracts fresh JWT Bearer token from LMT Go by fetching RSC page data
+   * and traversing Next.js chunk graph over lightweight HTTP GET calls.
    */
-  private async tryDirectApiHook(): Promise<string | null> {
-    const resp = await axios.get('https://lankametro.lk/en/smartmetro', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      },
-      timeout: 5000,
-    });
+  private async fetchFreshTokenViaHttp(): Promise<string | null> {
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': '*/*',
+    };
 
-    const html = resp.data;
-    if (typeof html === 'string') {
-      const tokens = html.match(/eyJ[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*/g);
-      if (tokens && tokens.length > 0) {
-        return tokens[0];
+    // 1. Fetch RSC page manifest for smartmetro
+    const rscUrl = 'https://lankametro.lk/en/smartmetro/__next.%24d%24locale.smartmetro.__PAGE__.txt?_rsc=1';
+    let queue: string[] = [];
+
+    try {
+      const rscRes = await axios.get(rscUrl, { headers, timeout: 5000 });
+      if (typeof rscRes.data === 'string') {
+        const chunkNames = [...new Set(rscRes.data.match(/static\/chunks\/[a-zA-Z0-9_\-\.]+\.js/g) || [])];
+        queue = chunkNames.map((c) => `https://lankametro.lk/_next/${c}`);
       }
+    } catch (e: any) {
+      this.logger.warn(`Could not fetch RSC page manifest: ${e.message}. Falling back to main page scan...`);
+      queue.push('https://lankametro.lk/en/smartmetro');
     }
+
+    const visited = new Set(queue);
+
+    // 2. Traverse chunk graph until valid JWT is found
+    while (queue.length > 0) {
+      const chunkUrl = queue.shift()!;
+      try {
+        const res = await axios.get(chunkUrl, { headers, timeout: 4000 });
+        if (typeof res.data === 'string') {
+          if (res.data.includes('eyJ')) {
+            const tokens = res.data.match(/eyJ[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*/g);
+            if (tokens && tokens.length > 0) {
+              for (const tok of tokens) {
+                try {
+                  const parts = tok.split('.');
+                  if (parts.length >= 2) {
+                    const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf-8'));
+                    if (payload.exp && (payload.user_id || payload.sub)) {
+                      return tok;
+                    }
+                  }
+                } catch (e) {}
+              }
+            }
+          }
+
+          // Discover inner chunk dependencies
+          const innerChunks = [...new Set(res.data.match(/static\/chunks\/[a-zA-Z0-9_\-\.]+\.js/g) || [])];
+          for (const ic of innerChunks) {
+            const fullUrl = `https://lankametro.lk/_next/${ic}`;
+            if (!visited.has(fullUrl)) {
+              visited.add(fullUrl);
+              queue.push(fullUrl);
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
     return null;
-  }
-
-  /**
-   * Strategy 1: Headless Playwright Browser Capture
-   */
-  private async tryPlaywrightAutoAuth(): Promise<string | null> {
-    this.logger.log('Spinning up temporary Playwright headless browser instance...');
-    const browser = await chromium.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-    });
-    let interceptedToken: string | null = null;
-
-    try {
-      const context = await browser.newContext({
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      });
-      const page = await context.newPage();
-
-      // Intercept WebSocket creation or HTTP requests containing token
-      page.on('websocket', (ws) => {
-        const url = ws.url();
-        const match = url.match(/token=(eyJ[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*)/);
-        if (match && match[1]) {
-          interceptedToken = match[1];
-        }
-      });
-
-      page.on('request', (req) => {
-        const url = req.url();
-        const match = url.match(/token=(eyJ[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*)/);
-        if (match && match[1]) {
-          interceptedToken = match[1];
-        }
-      });
-
-      await page.goto('https://lankametro.lk/en/smartmetro', {
-        waitUntil: 'networkidle',
-        timeout: 25000,
-      });
-
-      // Wait briefly for WebSocket connection if needed
-      for (let i = 0; i < 10; i++) {
-        if (interceptedToken) break;
-        await page.waitForTimeout(500);
-      }
-    } finally {
-      await browser.close();
-      this.logger.log('Playwright headless browser closed.');
-    }
-
-    return interceptedToken;
   }
 
   private updateCachedToken(token: string) {
@@ -141,12 +116,12 @@ export class TokenProviderService {
         if (payload.exp && typeof payload.exp === 'number') {
           this.tokenExpiresAt = payload.exp;
           const expDate = new Date(payload.exp * 1000).toISOString();
-          this.logger.log(`JWT payload decoded. Expiration timestamp: ${expDate}`);
+          this.logger.log(`JWT payload decoded successfully. Token Expiration: ${expDate}`);
         }
       }
     } catch (e) {
-      // If decoding fails, set default 24h expiration
       this.tokenExpiresAt = Math.floor(Date.now() / 1000) + 86400;
     }
   }
 }
+

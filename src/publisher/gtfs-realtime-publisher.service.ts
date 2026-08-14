@@ -7,12 +7,13 @@ export class GtfsRealtimePublisherService {
   private readonly logger = new Logger(GtfsRealtimePublisherService.name);
 
   private getBaseUrl(): string {
-    return (
-      process.env.TRANSIT_SERVER_URL ||
-      process.env.RAILWAY_PRIVATE_DOMAIN
-        ? `http://${process.env.RAILWAY_PRIVATE_DOMAIN}:3000/api/v1`
-        : 'http://slr-transit-server.railway.internal:3000/api/v1'
-    );
+    if (process.env.TRANSIT_SERVER_URL) {
+      return process.env.TRANSIT_SERVER_URL;
+    }
+    if (process.env.RAILWAY_PRIVATE_DOMAIN) {
+      return `http://${process.env.RAILWAY_PRIVATE_DOMAIN}:8080/api/v1`;
+    }
+    return 'http://slr-transit-server.railway.internal:8080/api/v1';
   }
 
   async publishVehiclePosition(dto: CreateVehiclePositionDto): Promise<boolean> {
