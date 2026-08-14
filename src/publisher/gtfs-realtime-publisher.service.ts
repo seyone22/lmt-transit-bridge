@@ -42,6 +42,52 @@ export class GtfsRealtimePublisherService {
     }
   }
 
+  async publishVehiclePositionsBatch(dtos: CreateVehiclePositionDto[]): Promise<boolean> {
+    if (!dtos || dtos.length === 0) return true;
+    if (dtos.length === 1) return this.publishVehiclePosition(dtos[0]);
+
+    const baseUrl = this.getBaseUrl();
+    const apiKey = process.env.TRANSIT_API_KEY || 'super-secret-key';
+
+    try {
+      await axios.post(`${baseUrl}/realtime/vehicle-positions/batch`, dtos, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+          'x-api-key': apiKey,
+        },
+        timeout: 8000,
+      });
+
+      this.logger.log(`Published Batch of ${dtos.length} VehiclePositions via Private Net.`);
+      return true;
+    } catch (err: any) {
+      if (baseUrl.includes('railway.internal')) {
+        const fallbackUrl = 'https://api.transit.seyone.dev/api/v1/realtime/vehicle-positions/batch';
+        try {
+          await axios.post(fallbackUrl, dtos, {
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`,
+              'x-api-key': apiKey,
+            },
+            timeout: 8000,
+          });
+          return true;
+        } catch {
+          // fallback to individual below
+        }
+      }
+      // Fallback to individual publishing if batch fails
+      let success = true;
+      for (const dto of dtos) {
+        const ok = await this.publishVehiclePosition(dto);
+        if (!ok) success = false;
+      }
+      return success;
+    }
+  }
+
   private async publishVehiclePositionPublicFallback(dto: CreateVehiclePositionDto): Promise<boolean> {
     const fallbackUrl = 'https://api.transit.seyone.dev/api/v1/realtime/vehicle-positions';
     const apiKey = process.env.TRANSIT_API_KEY || 'super-secret-key';

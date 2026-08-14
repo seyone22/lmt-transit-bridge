@@ -186,6 +186,7 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
       const chunkSize = 10;
       for (let i = 0; i < quietBuses.length; i += chunkSize) {
         const chunk = quietBuses.slice(i, i + chunkSize);
+        const batchPositions: any[] = [];
 
         await Promise.all(
           chunk.map(async (busInfo) => {
@@ -231,7 +232,7 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
                     bearing: computedBearing,
                   });
 
-                  this.publisher.publishVehiclePosition({
+                  batchPositions.push({
                     trip_id: busInfo.trip_id,
                     route_id: busInfo.route_id,
                     direction_id: 0,
@@ -251,6 +252,10 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
             }
           }),
         );
+
+        if (batchPositions.length > 0) {
+          await this.publisher.publishVehiclePositionsBatch(batchPositions);
+        }
 
         // 200ms stagger between chunks
         if (i + chunkSize < quietBuses.length) {
@@ -363,6 +368,7 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
         await this.refreshScheduleAssignmentsIfNeeded();
         const busList: any[] = Array.isArray(rawPayload) ? rawPayload : [rawPayload];
         const now = Date.now();
+        const batchPositions: any[] = [];
 
         for (const bus of busList) {
           const regNum = bus.registration_number || bus.busReg || bus.vehicle_id || 'UNKNOWN_BUS';
@@ -402,7 +408,7 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
               bearing: bearingDeg,
             });
 
-            this.publisher.publishVehiclePosition({
+            batchPositions.push({
               trip_id: tripId,
               route_id: routeId,
               direction_id: dirInt,
@@ -416,6 +422,10 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
               timestamp: new Date(timestampMs).toISOString(),
             });
           }
+        }
+
+        if (batchPositions.length > 0) {
+          await this.publisher.publishVehiclePositionsBatch(batchPositions);
         }
       } else if (eventType === 'init') {
         this.logger.log(`Received SmartMetro init framing: ${JSON.stringify(rawPayload)}`);
