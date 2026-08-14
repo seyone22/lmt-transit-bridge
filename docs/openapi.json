@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Lanka Metro Transit (LMT Go) Reverse-Engineered Upstream API",
-    "description": "Master OpenAPI 3.0 specification of all reverse-engineered upstream microservices, WebSocket streams, ticketing/POS transactions, live stop ETAs, and static artwork storage buckets for Lanka Metro Transit (Eimsky / NTC / HNB).",
-    "version": "1.2.0",
+    "description": "Master OpenAPI 3.0 specification of all reverse-engineered upstream microservices, WebSocket streams, ticketing/POS transactions, driver rosters, company registrations, and static artwork storage buckets for Lanka Metro Transit (Eimsky / NTC / HNB). Maintains automated health validation.",
+    "version": "1.3.0",
     "contact": {
       "name": "SLR & LMT Open Transit Engine",
       "url": "https://github.com/seyone22/lmt-transit-bridge"
@@ -29,6 +29,49 @@
       }
     },
     "schemas": {
+      "Company": {
+        "type": "object",
+        "description": "Registered Transit Operating Entity",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string", "example": "LANKA METRO TRANSIT PVT LTD" },
+          "registration_number": { "type": "string", "example": "PV 00341933" },
+          "email": { "type": "string", "example": "info@lankametro.lk" },
+          "phone": { "type": "string", "example": "0702886886" },
+          "address": { "type": "string", "example": "Ministry Of Transport Highways Ports and Civil Aviation, 7th Floor, Sethsiripaya Stage II, Battaramulla" },
+          "city": { "type": "string", "example": "Battaramulla" },
+          "province": { "type": "string", "example": "Western Province" },
+          "status": { "type": "string", "example": "active" }
+        }
+      },
+      "BusCategory": {
+        "type": "object",
+        "description": "Transit Fleet Service Classification",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string", "example": "Metro Bus" },
+          "description": { "type": "string", "example": "Premium luxury bus with advanced amenities" },
+          "status": { "type": "string", "example": "active" }
+        }
+      },
+      "UserRoster": {
+        "type": "object",
+        "description": "Operating Roster Staff Directory (Driver & Conductor)",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "company_id": { "type": "string", "format": "uuid" },
+          "user_type": { "type": "string", "enum": ["driver", "conductor", "customer"] },
+          "email": { "type": "string", "example": "NE5229D@gmail.com" },
+          "phone": { "type": "string", "example": "0752563563" },
+          "first_name": { "type": "string", "example": "WP-NE-5229" },
+          "last_name": { "type": "string", "example": "Driver" },
+          "full_name": { "type": "string", "example": "WP-NE-5229 Driver" },
+          "national_id": { "type": "string", "example": "NE5229D" },
+          "license_number": { "type": "string", "example": "LN-NE5229D" },
+          "status": { "type": "string", "example": "active" },
+          "last_login_at": { "type": "string", "format": "date-time" }
+        }
+      },
       "CardPaymentDetails": {
         "type": "object",
         "description": "cEMV / Contactless Card POS Transaction Metadata",
@@ -157,6 +200,54 @@
     }
   ],
   "paths": {
+    "/user-service/api/v1/companies": {
+      "get": {
+        "summary": "Fetch Registered Transit Operating Entity Directory",
+        "description": "Returns legal registered corporate entity details including registration numbers (PV 00341933), headquarters address (Ministry Of Transport 7th Fl), and email.",
+        "responses": {
+          "200": {
+            "description": "Registered companies array",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/Company" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/fare-service/api/v1/categories": {
+      "get": {
+        "summary": "Fetch Transit Vehicle Service Classifications",
+        "description": "Returns bus service categories (Metro Bus, Luxury, Semi-Luxury, Regular Bus) with category UUIDs.",
+        "responses": {
+          "200": {
+            "description": "Fleet categories array",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/BusCategory" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/user-service/api/v1/notifications": {
       "get": {
         "summary": "Fetch Broadcast Service Alerts & Public Notifications",
@@ -169,7 +260,7 @@
     "/user-service/api/v1/users": {
       "get": {
         "summary": "Fetch Operating Roster Directory (Drivers & Conductors)",
-        "description": "Returns user accounts filtered by type (user_type=driver or user_type=conductor).",
+        "description": "Returns user accounts filtered by type (user_type=driver or user_type=conductor) with full names, phone numbers, license numbers, and last login timestamps.",
         "parameters": [
           {
             "name": "user_type",
@@ -179,7 +270,22 @@
           }
         ],
         "responses": {
-          "200": { "description": "User accounts directory array" }
+          "200": {
+            "description": "User accounts directory array",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/UserRoster" }
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -241,7 +347,7 @@
     "/ticketing-service/api/v1/bus-schedule-assignments": {
       "get": {
         "summary": "Fetch Active Schedule Assignments Across Fleet",
-        "description": "Returns all long-range bus schedule assignments linking bus UUIDs, route IDs, and active daily schedule slots.",
+        "description": "Returns all long-range bus schedule assignments linking bus UUIDs, route IDs, and active daily schedule slots with validity date ranges.",
         "responses": {
           "200": { "description": "Active schedule assignments array" }
         }
@@ -250,7 +356,7 @@
     "/ticketing-service/api/v1/devices": {
       "get": {
         "summary": "Fetch Master Hardware Validator Register (50 Devices)",
-        "description": "Returns full hardware register of Aiken T16 handheld POS thermal printers and optical QR door turnstile scanners.",
+        "description": "Returns full hardware register of Aiken T16 handheld POS thermal printers (serial numbers, IMEI, firmware version 1.0.1.2) and optical QR door turnstile scanners.",
         "responses": {
           "200": { "description": "POS & validator hardware devices array" }
         }
@@ -296,8 +402,8 @@
     },
     "/fare-service/api/v1/routes/{route_id}/stops": {
       "get": {
-        "summary": "Fetch Ordered Directional Stop Sequence",
-        "description": "Returns ordered platform stop sequence with exact coordinates and platform codes for a specific route ID and direction ID.",
+        "summary": "Fetch Ordered Directional Stop Sequence (Trilingual)",
+        "description": "Returns ordered platform stop sequence with exact coordinates, platform codes (MCC60, MCC74), and trilingual stop names in English, Sinhala (කඩවත), and Tamil (கடவத்த).",
         "parameters": [
           {
             "name": "route_id",
