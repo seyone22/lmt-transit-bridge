@@ -80,7 +80,7 @@ async function validateApiSpec() {
   const jwtToken = await fetchFreshToken();
   const headers = {
     Authorization: `Bearer ${jwtToken}`,
-    'User-Agent': 'lmt-transit-bridge-validator/1.0',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     Accept: 'application/json',
   };
 
