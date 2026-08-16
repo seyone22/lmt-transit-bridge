@@ -1,98 +1,118 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Lanka Metro Transit Bridge (lmt-transit-bridge)
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+## Overview
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+`lmt-transit-bridge` is a specialized NestJS microservice bridge designed to interface with the Lanka Metro Transit (LMT) Metrobus upstream microservice infrastructure. It extracts real-time bus telemetry, GTFS schedule metadata, stop sequences, dynamic stage fare matrices, driver rosters, and contactless cEMV payment metadata, converting upstream streams into standardized GTFS Schedule and GTFS-Realtime (Vehicle Positions, Trip Updates, Service Alerts) specification formats.
 
-## Description
+---
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## Architecture and Core Services
 
-## Project setup
+### 1. Dynamic Authentication (`TokenProviderService`)
+- Resolves valid JWT Bearer tokens directly from upstream Next.js React Server Components (RSC) chunk manifests without hardcoded credentials.
+- Manages in-memory token lifecycle caching and automatically triggers proactive refresh prior to token expiration.
 
-```bash
-$ npm install
+### 2. Upstream Microservice Integration (`LmtService`)
+Communicates with upstream proxies at `https://lankametro.lk/metrobus-proxy`:
+- `GET /ticketing-service/api/v1/tickets`: Real-time ticket issuances, fare structures, and contactless cEMV payment metadata (Masked PAN, Auth Code, RRN, Invoice Number, Merchant ID, Terminal ID).
+- `GET /ticketing-service/api/v1/buses/{bus_id}/tracking`: Live GPS positions, segment progress fraction, stop-by-stop arrival ETAs, and delay calculations.
+- `GET /user-service/api/v1/companies`: Legal corporate identity and registration details for Lanka Metro Transit Pvt Ltd.
+- `GET /user-service/api/v1/users?user_type=driver`: Driver roster, contact numbers, and license metadata.
+- `GET /fare-service/api/v1/routes`: Trilingual route, stop sequence, and station coordinates (English, Sinhala, Tamil).
+- `GET /fare-service/api/v1/categories`: Fleet classification mappings (Metro Bus, Luxury, Semi-Luxury, Regular Bus).
+
+### 3. Automated Weekly GTFS and Fare Rules Sync (`GtfsStaticSyncService`)
+- **Automated Cron**: Executes every Sunday at 02:00 AM UTC (`@Cron('0 2 * * 0')`).
+- **Data Ingestion**: Synchronizes routes, stops, calendar schedules, fare attributes, and fare rules into PostgreSQL (`slr-transit-server`).
+- **Archive Generation**: Triggers automated generation of compliant GTFS static ZIP archives.
+- **Manual Endpoint**: REST endpoint `POST /sync/static` for manually triggering sync cycles on demand.
+
+### 4. Realtime Protobuf Publishing (`PublisherService`)
+- Encodes upstream vehicle tracking updates into standard GTFS-Realtime Protocol Buffers:
+  - Vehicle Positions (`vp`)
+  - Trip Updates (`tu`)
+  - Service Alerts (`sa`)
+
+---
+
+## API Documentation and Specifications
+
+The project includes an OpenAPI 3.0 specification documenting all internal and upstream proxy endpoints:
+- Location: `docs/openapi.json`
+- Version: `1.3.0`
+- Coverage: Includes detailed JSON schemas for `Ticket`, `CardPaymentDetails`, `BusTracking`, `Company`, `UserRoster`, `BusCategory`, and `GtfsRealtimeMessage`.
+
+---
+
+## Getting Started
+
+### Prerequisites
+- Node.js 22 LTS or higher
+- npm 10 or higher
+- Access to `slr-transit-server` PostgreSQL instance
+
+### Environment Variables
+Configure the following variables in `.env`:
+
+```env
+PORT=3000
+TRANSIT_SERVER_URL=https://slr-transit-server-production.up.railway.app/api/v1
+TRANSIT_API_KEY=super-secret-token
+LMT_JWT_TOKEN=
 ```
 
-## Compile and run the project
+### Installation
 
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+npm install
 ```
 
-## Run tests
+### Running Locally
 
 ```bash
-# unit tests
-$ npm run test
+# Development mode
+npm run start
 
-# e2e tests
-$ npm run test:e2e
+# Watch mode
+npm run start:dev
 
-# test coverage
-$ npm run test:cov
+# Production build
+npm run build
+npm run start:prod
 ```
 
-## Deployment
+---
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+## Testing and Health Checks
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
+### Manual GTFS Static Sync
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+curl -X POST http://localhost:3000/sync/static
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+### Upstream OpenAPI Health Validation
+Run the automated upstream API validation script:
+```bash
+npx ts-node scripts/validate-upstream-api.ts
+```
 
-## Resources
+### Unit and E2E Tests
+```bash
+npm run test
+npm run test:e2e
+```
 
-Check out a few resources that may come in handy when working with NestJS:
+---
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+## CI/CD Pipeline
 
-## Support
+Continuous Integration is managed via GitHub Actions:
+- Workflow File: `.github/workflows/api-validation.yml`
+- Schedule: Runs weekly every Sunday at 00:00 UTC.
+- Environment: Node.js 22 LTS on Ubuntu Latest.
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+---
 
 ## License
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+Private and Confidential - Lanka Metro Transit Bridge Initiative.
