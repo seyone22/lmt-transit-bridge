@@ -2,9 +2,69 @@ import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
 
-const LMT_JWT_TOKEN =
-  process.env.LMT_JWT_TOKEN ||
-  'eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiYTFmYmY0MWYtMzY2Zi00Mjg5LTllMTMtYWZhNmNlMDAzZDc2IiwiZW1haWwiOiJjdXN0b21lci4wNzY2NzA2ODE2QGludGVybmFsLm1ldHJvYnVzLmxrIiwidXNlcl90eXBlIjoiY3VzdG9tZXIiLCJ0b2tlbl9pZCI6IjI5OWRmNGZkLWRmZDAtNGE0NC1hOTAzLTVkNzY1YmQ2MjE5MyIsImlzcyI6Im50Yy11c2VyLXNlcnZpY2UiLCJzdWIiOiJhMWZiZjQxZi0zNjZmLTQyODktOWUxMy1hZmE2Y2UwMDNkNzYiLCJhdWQiOlsibnRjLWFwaSJdLCJleHAiOjE4MDYxMzkzOTgsIm5iZiI6MTc3NDYwMzM5OCwiaWF0IjoxNzc0NjAzMzk4fQ.Nf8JcXTXOqIKuMibN4xlvirkKd7p56Sj2nHFIZFfWYD0l9SzKqayr6vznNto33aw-hvR5aVGHwoZN_CIr0RqBg';
+async function fetchFreshToken(): Promise<string> {
+  if (process.env.LMT_JWT_TOKEN && process.env.LMT_JWT_TOKEN.trim().length > 20) {
+    return process.env.LMT_JWT_TOKEN.trim();
+  }
+
+  console.log('Resolving fresh live JWT from LMT Go via Next.js RSC chunk graph...');
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': '*/*',
+  };
+
+  const rscUrl = 'https://lankametro.lk/en/smartmetro/__next.%24d%24locale.smartmetro.__PAGE__.txt?_rsc=1';
+  let queue: string[] = [];
+
+  try {
+    const rscRes = await axios.get(rscUrl, { headers, timeout: 5000 });
+    if (typeof rscRes.data === 'string') {
+      const chunkNames = [...new Set(rscRes.data.match(/static\/chunks\/[a-zA-Z0-9_\-\.]+\.js/g) || [])];
+      queue = chunkNames.map((c) => `https://lankametro.lk/_next/${c}`);
+    }
+  } catch (e: any) {
+    queue.push('https://lankametro.lk/en/smartmetro');
+  }
+
+  const visited = new Set(queue);
+
+  while (queue.length > 0) {
+    const chunkUrl = queue.shift()!;
+    try {
+      const res = await axios.get(chunkUrl, { headers, timeout: 4000 });
+      if (typeof res.data === 'string') {
+        if (res.data.includes('eyJ')) {
+          const tokens = res.data.match(/eyJ[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*/g);
+          if (tokens && tokens.length > 0) {
+            for (const tok of tokens) {
+              try {
+                const parts = tok.split('.');
+                if (parts.length >= 2) {
+                  const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf-8'));
+                  if (payload.exp && (payload.user_id || payload.sub)) {
+                    console.log(`✅ Dynamically resolved fresh JWT (User: ${payload.email || payload.user_id})`);
+                    return tok;
+                  }
+                }
+              } catch (e) {}
+            }
+          }
+        }
+
+        const innerChunks = [...new Set(res.data.match(/static\/chunks\/[a-zA-Z0-9_\-\.]+\.js/g) || [])];
+        for (const ic of innerChunks) {
+          const fullUrl = `https://lankametro.lk/_next/${ic}`;
+          if (!visited.has(fullUrl)) {
+            visited.add(fullUrl);
+            queue.push(fullUrl);
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  throw new Error('Could not resolve fresh JWT token from LMT Go upstream service.');
+}
 
 async function validateApiSpec() {
   console.log('🚀 Starting Automated Upstream OpenAPI Specification Health Validation...\n');
@@ -17,8 +77,9 @@ async function validateApiSpec() {
   const spec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
   const baseUrl = spec.servers[0]?.url || 'https://lankametro.lk/metrobus-proxy';
 
+  const jwtToken = await fetchFreshToken();
   const headers = {
-    Authorization: `Bearer ${LMT_JWT_TOKEN}`,
+    Authorization: `Bearer ${jwtToken}`,
     'User-Agent': 'lmt-transit-bridge-validator/1.0',
     Accept: 'application/json',
   };
