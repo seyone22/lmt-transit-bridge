@@ -33,10 +33,6 @@ export class GtfsRealtimePublisherService {
       this.logger.log(`Published VehiclePosition [${dto.vehicle_id || dto.trip_id}] via Private Net -> (${dto.latitude.toFixed(4)}, ${dto.longitude.toFixed(4)})`);
       return true;
     } catch (err: any) {
-      // Fallback to public domain if private networking is unresolvable locally
-      if (baseUrl.includes('railway.internal')) {
-        return this.publishVehiclePositionPublicFallback(dto);
-      }
       this.logger.error(`Failed to publish VehiclePosition for ${dto.vehicle_id || dto.trip_id}: ${err.message}`);
       return false;
     }
@@ -62,48 +58,7 @@ export class GtfsRealtimePublisherService {
       this.logger.log(`Published Batch of ${dtos.length} VehiclePositions via Private Net.`);
       return true;
     } catch (err: any) {
-      if (baseUrl.includes('railway.internal')) {
-        const fallbackUrl = 'https://api.transit.seyone.dev/api/v1/realtime/vehicle-positions/batch';
-        try {
-          await axios.post(fallbackUrl, dtos, {
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${apiKey}`,
-              'x-api-key': apiKey,
-            },
-            timeout: 8000,
-          });
-          return true;
-        } catch {
-          // fallback to individual below
-        }
-      }
-      // Fallback to individual publishing if batch fails
-      let success = true;
-      for (const dto of dtos) {
-        const ok = await this.publishVehiclePosition(dto);
-        if (!ok) success = false;
-      }
-      return success;
-    }
-  }
-
-  private async publishVehiclePositionPublicFallback(dto: CreateVehiclePositionDto): Promise<boolean> {
-    const fallbackUrl = 'https://api.transit.seyone.dev/api/v1/realtime/vehicle-positions';
-    const apiKey = process.env.TRANSIT_API_KEY || 'super-secret-key';
-
-    try {
-      await axios.post(fallbackUrl, dto, {
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-          'x-api-key': apiKey,
-        },
-        timeout: 5000,
-      });
-      return true;
-    } catch (err: any) {
-      this.logger.error(`Fallback VehiclePosition publish failed: ${err.message}`);
+      this.logger.warn(`Failed to publish VehiclePositions batch of ${dtos.length}: ${err.message}`);
       return false;
     }
   }
@@ -163,24 +118,6 @@ export class GtfsRealtimePublisherService {
       });
       return true;
     } catch (err: any) {
-      // Retry via public domain fallback if private networking is unresolvable locally
-      if (baseUrl.includes('railway.internal')) {
-        const fallbackUrl = `https://api.transit.seyone.dev/api/v1${endpoint}`;
-        try {
-          await axios.post(fallbackUrl, payload, {
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${apiKey}`,
-              'x-api-key': apiKey,
-            },
-            timeout: 10000,
-          });
-          return true;
-        } catch (fallbackErr: any) {
-          this.logger.warn(`Failed to post to CRUD ${endpoint}: ${fallbackErr.message}`);
-          return false;
-        }
-      }
       this.logger.warn(`Failed to post to CRUD ${endpoint}: ${err.message}`);
       return false;
     }

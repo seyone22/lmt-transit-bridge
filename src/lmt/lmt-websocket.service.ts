@@ -149,10 +149,10 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
   private startMobileTrackingPolling() {
     if (this.pollInterval) clearInterval(this.pollInterval);
 
-    // Delta Polling Loop: Check every 25 seconds, ONLY polling buses quiet on WebSocket (> 30s)
+    // Delta Polling Loop: Check every 45 seconds, ONLY polling buses quiet on WebSocket (> 45s)
     this.pollInterval = setInterval(async () => {
       await this.pollMobileAppBusTracking();
-    }, 25000);
+    }, 45000);
   }
 
   private async pollMobileAppBusTracking() {
