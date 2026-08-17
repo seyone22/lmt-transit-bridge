@@ -156,10 +156,20 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async pollMobileAppBusTracking() {
+    // Nighttime Off-Peak Backoff: 11:00 PM to 04:30 AM Sri Lanka Time (IST, UTC+5:30)
+    const now = Date.now();
+    const slDate = new Date(now + 5.5 * 3600 * 1000);
+    const slHours = slDate.getUTCHours();
+    const slMinutes = slDate.getUTCMinutes();
+    const isNighttime = slHours >= 23 || slHours < 4 || (slHours === 4 && slMinutes < 30);
+
+    if (isNighttime && this.activeBusUUIDs.size === 0) {
+      return;
+    }
+
     await this.refreshScheduleAssignmentsIfNeeded();
     if (this.activeBusUUIDs.size === 0) return;
 
-    const now = Date.now();
     const quietBuses: { bus_id: string; regNum: string; trip_id: string; route_id: string }[] = [];
 
     // Filter buses that haven't sent a WebSocket update in the last 30 seconds

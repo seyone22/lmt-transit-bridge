@@ -83,42 +83,54 @@ export class LmtStaticSyncService implements OnModuleInit {
       });
       this.logger.log('✅ Agency & Attributions synced to server.');
 
-      // 2. Fetch GeoJSON Route Shapes (CM01 & CM02)
-      const geoRes = await axios.get(
-        'https://lankametro.lk/gcs-proxy/artwork_storage_dev/new-release/v7-Forward-M-K.geojson',
-        { timeout: 10000 },
-      );
-      if (geoRes.status === 200 && geoRes.data) {
-        const lineFeature = geoRes.data.features?.find(
-          (f: any) => f.geometry?.type === 'LineString' || f.geometry?.type === 'MultiLineString',
+      // 2. Fetch GeoJSON Route Shapes (CM01 & CM02) - Skip if shapes already ingested
+      const baseUrl = process.env.TRANSIT_SERVER_URL || 'http://slr-transit-server.railway.internal:8080/api/v1';
+      let shapesAlreadyIngested = false;
+      try {
+        const existingShapes = await axios.get(`${baseUrl}/shapes/SHAPE_CM01`, { timeout: 3000 });
+        if (existingShapes.status === 200 && Array.isArray(existingShapes.data) && existingShapes.data.length > 0) {
+          shapesAlreadyIngested = true;
+          this.logger.log(`✅ Route shapes [SHAPE_CM01, SHAPE_CM02] already present in DB (${existingShapes.data.length} waypoints). Skipping re-ingestion.`);
+        }
+      } catch (e) {}
+
+      if (!shapesAlreadyIngested) {
+        const geoRes = await axios.get(
+          'https://lankametro.lk/gcs-proxy/artwork_storage_dev/new-release/v7-Forward-M-K.geojson',
+          { timeout: 10000 },
         );
+        if (geoRes.status === 200 && geoRes.data) {
+          const lineFeature = geoRes.data.features?.find(
+            (f: any) => f.geometry?.type === 'LineString' || f.geometry?.type === 'MultiLineString',
+          );
 
-        if (lineFeature && lineFeature.geometry?.coordinates) {
-          const coords: number[][] = lineFeature.geometry.coordinates;
-          this.logger.log(`📌 Ingesting ${coords.length * 2} shape waypoints for SHAPE_CM01 & SHAPE_CM02...`);
+          if (lineFeature && lineFeature.geometry?.coordinates) {
+            const coords: number[][] = lineFeature.geometry.coordinates;
+            this.logger.log(`📌 Ingesting ${coords.length * 2} shape waypoints for SHAPE_CM01 & SHAPE_CM02...`);
 
-          for (let i = 0; i < coords.length; i += 50) {
-            const chunk = coords.slice(i, i + 50);
-            await Promise.all([
-              ...chunk.map((c, idx) =>
-                this.publisher.publishShape({
-                  shape_id: 'SHAPE_CM01',
-                  shape_pt_lat: c[1],
-                  shape_pt_lon: c[0],
-                  shape_pt_sequence: i + idx + 1,
-                }),
-              ),
-              ...chunk.map((c, idx) =>
-                this.publisher.publishShape({
-                  shape_id: 'SHAPE_CM02',
-                  shape_pt_lat: c[1],
-                  shape_pt_lon: c[0],
-                  shape_pt_sequence: i + idx + 1,
-                }),
-              ),
-            ]);
+            for (let i = 0; i < coords.length; i += 50) {
+              const chunk = coords.slice(i, i + 50);
+              await Promise.all([
+                ...chunk.map((c, idx) =>
+                  this.publisher.publishShape({
+                    shape_id: 'SHAPE_CM01',
+                    shape_pt_lat: c[1],
+                    shape_pt_lon: c[0],
+                    shape_pt_sequence: i + idx + 1,
+                  }),
+                ),
+                ...chunk.map((c, idx) =>
+                  this.publisher.publishShape({
+                    shape_id: 'SHAPE_CM02',
+                    shape_pt_lat: c[1],
+                    shape_pt_lon: c[0],
+                    shape_pt_sequence: i + idx + 1,
+                  }),
+                ),
+              ]);
+            }
+            this.logger.log('✅ Route shapes [SHAPE_CM01, SHAPE_CM02] ingested.');
           }
-          this.logger.log('✅ Route shapes [SHAPE_CM01, SHAPE_CM02] ingested.');
         }
       }
 
