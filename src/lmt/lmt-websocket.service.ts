@@ -77,8 +77,8 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
 
   private async refreshScheduleAssignmentsIfNeeded() {
     const now = Date.now();
-    // 15-minute success cooldown, 5-minute failure cooldown to prevent 5-second polling loops
-    const cooldownMs = this.assignmentMap.size > 0 ? 15 * 60 * 1000 : 5 * 60 * 1000;
+    // 1-hour success cooldown, 5-minute failure cooldown
+    const cooldownMs = this.assignmentMap.size > 0 ? 60 * 60 * 1000 : 5 * 60 * 1000;
     if (now - this.lastAssignmentFetch < cooldownMs) {
       return;
     }
@@ -335,7 +335,7 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.ws.ping();
       }
-    }, 15000);
+    }, 30000);
   }
 
   private stopHeartbeat() {
