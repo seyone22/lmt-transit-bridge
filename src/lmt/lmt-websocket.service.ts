@@ -86,7 +86,12 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
 
     try {
       const token = await this.tokenProvider.getOrRefreshToken();
-      const headers = { Authorization: `Bearer ${token}` };
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Origin: 'https://lankametro.lk',
+        Referer: 'https://lankametro.lk/en/smartmetro',
+      };
       const todayStr = new Date().toISOString().split('T')[0];
       const routeIds = [
         '8bc594e3-8ad6-4a0d-9138-bf8b4247e2f5',
@@ -188,7 +193,9 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
       const token = await this.tokenProvider.getOrRefreshToken();
       const headers = {
         Authorization: `Bearer ${token}`,
-        'User-Agent': 'okhttp/4.10.0',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Origin: 'https://lankametro.lk',
+        Referer: 'https://lankametro.lk/en/smartmetro',
         Accept: 'application/json',
       };
 

@@ -47,58 +47,53 @@ export class TokenProviderService {
    */
   private async fetchFreshTokenViaHttp(): Promise<string | null> {
     const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': '*/*',
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     };
 
-    // 1. Fetch RSC page manifest for smartmetro
-    const rscUrl = 'https://lankametro.lk/en/smartmetro/__next.%24d%24locale.smartmetro.__PAGE__.txt?_rsc=1';
-    let queue: string[] = [];
+    const pages = [
+      'https://lankametro.lk/en/smartmetro',
+      'https://lankametro.lk/en',
+      'https://lankametro.lk',
+    ];
 
-    try {
-      const rscRes = await axios.get(rscUrl, { headers, timeout: 5000 });
-      if (typeof rscRes.data === 'string') {
-        const chunkNames = [...new Set(rscRes.data.match(/static\/chunks\/[a-zA-Z0-9_\-\.]+\.js/g) || [])];
-        queue = chunkNames.map((c) => `https://lankametro.lk/_next/${c}`);
+    const scriptUrls = new Set<string>();
+
+    // 1. Discover all static chunk script URLs from page HTML
+    for (const pageUrl of pages) {
+      try {
+        const res = await axios.get(pageUrl, { headers, timeout: 5000 });
+        if (typeof res.data === 'string') {
+          const matches = res.data.match(/src=["']([^"']+\.js[^"']*)["']/g) || [];
+          matches.forEach((m) => {
+            let src = m.replace(/^src=["']/, '').replace(/["']$/, '');
+            if (src.startsWith('/')) src = 'https://lankametro.lk' + src;
+            scriptUrls.add(src);
+          });
+        }
+      } catch (e: any) {
+        this.logger.warn(`Could not fetch page ${pageUrl}: ${e.message}`);
       }
-    } catch (e: any) {
-      this.logger.warn(`Could not fetch RSC page manifest: ${e.message}. Falling back to main page scan...`);
-      queue.push('https://lankametro.lk/en/smartmetro');
     }
 
-    const visited = new Set(queue);
-
-    // 2. Traverse chunk graph until valid JWT is found
-    while (queue.length > 0) {
-      const chunkUrl = queue.shift()!;
+    // 2. Scan script chunks for a valid JWT token
+    for (const sUrl of scriptUrls) {
       try {
-        const res = await axios.get(chunkUrl, { headers, timeout: 4000 });
-        if (typeof res.data === 'string') {
-          if (res.data.includes('eyJ')) {
-            const tokens = res.data.match(/eyJ[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*/g);
-            if (tokens && tokens.length > 0) {
-              for (const tok of tokens) {
-                try {
-                  const parts = tok.split('.');
-                  if (parts.length >= 2) {
-                    const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf-8'));
-                    if (payload.exp && (payload.user_id || payload.sub)) {
-                      return tok;
-                    }
-                  }
-                } catch (e) {}
+        const res = await axios.get(sUrl, { headers: { 'User-Agent': headers['User-Agent'] }, timeout: 4000 });
+        if (typeof res.data === 'string' && res.data.includes('eyJ')) {
+          const tokens = res.data.match(/eyJ[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*/g) || [];
+          for (const tok of tokens) {
+            try {
+              const parts = tok.split('.');
+              if (parts.length >= 2) {
+                const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf-8'));
+                if (payload.exp && (payload.user_id || payload.sub || payload.user_type)) {
+                  this.logger.log(`Found valid JWT token in script ${sUrl}`);
+                  return tok;
+                }
               }
-            }
-          }
-
-          // Discover inner chunk dependencies
-          const innerChunks = [...new Set(res.data.match(/static\/chunks\/[a-zA-Z0-9_\-\.]+\.js/g) || [])];
-          for (const ic of innerChunks) {
-            const fullUrl = `https://lankametro.lk/_next/${ic}`;
-            if (!visited.has(fullUrl)) {
-              visited.add(fullUrl);
-              queue.push(fullUrl);
-            }
+            } catch (e) {}
           }
         }
       } catch (e) {}
