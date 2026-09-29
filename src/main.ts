@@ -10,8 +10,8 @@ axios.defaults.httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 50 })
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  const port = process.env.PORT || 3001;
-  await app.listen(port);
-  console.log(`LMT Transit Bridge Service running on port: ${port}`);
+  const port = process.env.PORT || 3000;
+  await app.listen(port, '0.0.0.0');
+  console.log(`LMT Transit Bridge Service running on 0.0.0.0:${port}`);
 }
 bootstrap();
