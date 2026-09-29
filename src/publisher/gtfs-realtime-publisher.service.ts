@@ -44,23 +44,30 @@ export class GtfsRealtimePublisherService {
 
     const baseUrl = this.getBaseUrl();
     const apiKey = process.env.TRANSIT_API_KEY || 'super-secret-key';
+    const chunkSize = 50;
+    let allSuccess = true;
 
-    try {
-      await axios.post(`${baseUrl}/realtime/vehicle-positions/batch`, dtos, {
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-          'x-api-key': apiKey,
-        },
-        timeout: 8000,
-      });
-
-      this.logger.log(`Published Batch of ${dtos.length} VehiclePositions via Private Net.`);
-      return true;
-    } catch (err: any) {
-      this.logger.warn(`Failed to publish VehiclePositions batch of ${dtos.length}: ${err.message}`);
-      return false;
+    for (let i = 0; i < dtos.length; i += chunkSize) {
+      const chunk = dtos.slice(i, i + chunkSize);
+      try {
+        await axios.post(`${baseUrl}/realtime/vehicle-positions/batch`, chunk, {
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+            'x-api-key': apiKey,
+          },
+          timeout: 8000,
+        });
+      } catch (err: any) {
+        this.logger.warn(`Failed to publish VehiclePositions chunk (${chunk.length} items): ${err.message}`);
+        allSuccess = false;
+      }
     }
+
+    if (allSuccess) {
+      this.logger.log(`Published ${dtos.length} VehiclePositions in chunks of ${chunkSize} via Private Net.`);
+    }
+    return allSuccess;
   }
 
   async publishAgency(data: any): Promise<boolean> {
