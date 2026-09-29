@@ -51,7 +51,7 @@ export class LmtSourceExtractorService {
   private cachedData: ExtractedTransitData | null = null;
   private lastFetchedAt = 0;
 
-  private readonly knownChunkUrl = 'https://lankametro.lk/_next/static/chunks/04zlm32ou8r3k.js';
+  private readonly knownChunkUrl = 'https://lankametro.lk/_next/static/chunks/2n389slzr1fhl.js';
 
   async getTransitData(forceRefresh = false): Promise<ExtractedTransitData> {
     const now = Date.now();
@@ -83,24 +83,42 @@ export class LmtSourceExtractorService {
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     };
 
-    // 1. Try discovering dynamically from page scripts
+    // 1. Try discovering dynamically from page scripts & RSC manifests
     try {
-      const pageRes = await axios.get('https://lankametro.lk/en/smartmetro', { headers, timeout: 5000 });
-      if (typeof pageRes.data === 'string') {
-        const matches = pageRes.data.match(/src=["']([^"']+\.js[^"']*)["']/g) || [];
-        for (const m of matches) {
-          let src = m.replace(/^src=["']/, '').replace(/["']$/, '');
-          if (src.startsWith('/')) src = 'https://lankametro.lk' + src;
-          if (src.includes('static/chunks/')) {
-            try {
-              const chunkRes = await axios.get(src, { headers, timeout: 5000 });
-              if (typeof chunkRes.data === 'string' && chunkRes.data.includes('route_code:"CM08"')) {
-                this.logger.log(`Found live route chunk at ${src}`);
-                return chunkRes.data;
-              }
-            } catch {}
+      const scriptUrls = new Set<string>();
+      const pages = ['https://lankametro.lk/en/smartmetro', 'https://lankametro.lk/en', 'https://lankametro.lk'];
+
+      for (const p of pages) {
+        try {
+          const pageRes = await axios.get(p, { headers, timeout: 5000 });
+          if (typeof pageRes.data === 'string') {
+            const matches = pageRes.data.match(/src=["']([^"']+\.js[^"']*)["']/g) || [];
+            matches.forEach((m: string) => {
+              let src = m.replace(/^src=["']/, '').replace(/["']$/, '');
+              if (src.startsWith('/')) src = 'https://lankametro.lk' + src;
+              scriptUrls.add(src);
+            });
           }
+        } catch {}
+      }
+
+      // Also inspect RSC payload
+      try {
+        const rscRes = await axios.get('https://lankametro.lk/en/smartmetro/__next.%24d%24locale.smartmetro.__PAGE__.txt?_rsc=1', { headers, timeout: 5000 });
+        if (typeof rscRes.data === 'string') {
+          const chunkNames = [...new Set(rscRes.data.match(/static\/chunks\/[a-zA-Z0-9_\-\.]+\.js/g) || [])];
+          chunkNames.forEach((c: string) => scriptUrls.add(`https://lankametro.lk/_next/${c}`));
         }
+      } catch {}
+
+      for (const sUrl of scriptUrls) {
+        try {
+          const chunkRes = await axios.get(sUrl, { headers, timeout: 5000 });
+          if (typeof chunkRes.data === 'string' && chunkRes.data.includes('route_code:"CM08"')) {
+            this.logger.log(`Found live route chunk at ${sUrl}`);
+            return chunkRes.data;
+          }
+        } catch {}
       }
     } catch (e: any) {
       this.logger.warn(`Dynamic chunk discovery notice: ${e.message}`);
