@@ -43,6 +43,53 @@ export function calculateBearingDeg(lat1: number, lon1: number, lat2: number, lo
   return Math.round((brng + 360) % 360);
 }
 
+export function isValidLmtBus(
+  regNum: string,
+  lat: number,
+  lng: number,
+  speedKmh?: number,
+  isAssigned = false,
+): boolean {
+  if (isNaN(lat) || isNaN(lng)) return false;
+
+  // 1. Colombo Metropolitan Operating Area Geofence (excludes Kandy, Jaffna, Galle, Ocean)
+  if (lat < 6.68 || lat > 7.22 || lng < 79.82 || lng > 80.15) {
+    return false;
+  }
+  // Exclude western ocean waters
+  if (lng < 79.842 && lat < 6.92) return false;
+  if (lng < 79.83) return false;
+
+  // 2. Reject Simulator / Test / Mock IoT Devices
+  const upper = (regNum || '').toUpperCase().trim();
+  if (
+    upper.length === 0 ||
+    upper.startsWith('TEST') ||
+    upper.startsWith('SUN-') ||
+    upper.startsWith('DEV-') ||
+    upper.startsWith('SIM-') ||
+    upper === 'UNKNOWN_BUS' ||
+    /^(0{3,}|1{3,}|2{3,}|3{3,}|4{3,}|5{3,}|12345|54321)/.test(upper) ||
+    /^\d{5}$/.test(upper)
+  ) {
+    return false;
+  }
+
+  // 3. Genuine Sri Lankan commercial vehicle plate regex: e.g. WP-NE-5234, NE-6532, ND-1234, NA-5678, WP-ND-1234
+  const isSriLankanPlate = /^(?:[A-Z]{2}-)?[A-Z]{2,3}-\d{3,4}$/.test(upper) || /^[A-Z]{2,3}\d{4}$/.test(upper);
+
+  if (!isAssigned && !isSriLankanPlate) {
+    return false;
+  }
+
+  // 4. Plausible speed filter
+  if (speedKmh !== undefined && speedKmh > 120) {
+    return false;
+  }
+
+  return true;
+}
+
 @Injectable()
 export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(LmtWebsocketService.name);
@@ -205,6 +252,9 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
                 const loc = trackData.bus_location;
 
                 if (loc && typeof loc.lat === 'number' && typeof loc.lng === 'number') {
+                  if (!isValidLmtBus(busInfo.regNum, loc.lat, loc.lng, undefined, true)) {
+                    return;
+                  }
                   const timestampMs = loc.recorded_at ? new Date(loc.recorded_at).getTime() : Date.now();
                   const prevPos = this.lastPositionMap.get(busInfo.regNum);
 
@@ -380,6 +430,12 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
           const regNum = bus.registration_number || bus.busReg || bus.vehicle_id || 'UNKNOWN_BUS';
           const lat = parseFloat(bus.lat || bus.latitude);
           const lng = parseFloat(bus.lng || bus.longitude);
+          const rawSpeed = isNaN(parseFloat(bus.speed)) ? 0 : parseFloat(bus.speed);
+
+          const isAssigned = this.assignmentMap.has(regNum) || (bus.bus_id && this.activeBusUUIDs.has(bus.bus_id));
+          if (!isValidLmtBus(regNum, lat, lng, rawSpeed, isAssigned)) {
+            continue;
+          }
 
           if (!isNaN(lat) && !isNaN(lng)) {
             // Track last seen timestamp on WebSocket

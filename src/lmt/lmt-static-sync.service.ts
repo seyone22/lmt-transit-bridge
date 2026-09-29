@@ -92,7 +92,7 @@ export class LmtStaticSyncService implements OnModuleInit {
       const baseUrl = process.env.TRANSIT_SERVER_URL || 'http://slr-transit-server.railway.internal:8080/api/v1';
       let shapesAlreadyIngested = false;
       try {
-        const existingShapes = await axios.get(`${baseUrl}/shapes/SHAPE_CM01`, { timeout: 3000 });
+        const existingShapes = await axios.get(`${baseUrl}/shapes/SHAPE_CM01_D0`, { timeout: 3000 });
         if (existingShapes.status === 200 && Array.isArray(existingShapes.data) && existingShapes.data.length > 0) {
           shapesAlreadyIngested = true;
           this.logger.log(`✅ Route shapes already present in DB (${existingShapes.data.length} waypoints). Skipping re-ingestion.`);
@@ -101,10 +101,10 @@ export class LmtStaticSyncService implements OnModuleInit {
 
       if (!shapesAlreadyIngested) {
         const shapeConfigs = [
-          { url: 'https://lankametro.lk/gcs-proxy/artwork_storage_dev/v7.2-Forward-M-K.geojson', shapeIds: ['SHAPE_CM01', 'SHAPE_CM03'] },
-          { url: 'https://lankametro.lk/gcs-proxy/artwork_storage_dev/v7.2-Return-K-M.geojson', shapeIds: ['SHAPE_CM01_RET', 'SHAPE_CM03_RET'] },
-          { url: 'https://lankametro.lk/gcs-proxy/artwork_storage_dev/metro/v7.2%20Forward-M-C.geojson', shapeIds: ['SHAPE_CM02', 'SHAPE_CM08'] },
-          { url: 'https://lankametro.lk/gcs-proxy/artwork_storage_dev/metro/v7.2-Return-C-M.geojson', shapeIds: ['SHAPE_CM02_RET', 'SHAPE_CM08_RET'] },
+          { url: 'https://lankametro.lk/gcs-proxy/artwork_storage_dev/metro/v7.2%20Forward-M-C.geojson', shapeIds: ['SHAPE_CM01_D0'] },
+          { url: 'https://lankametro.lk/gcs-proxy/artwork_storage_dev/metro/v7.2-Return-C-M.geojson', shapeIds: ['SHAPE_CM01_D1'] },
+          { url: 'https://lankametro.lk/gcs-proxy/artwork_storage_dev/v7.2-Forward-M-K.geojson', shapeIds: ['SHAPE_CM03_D1'] },
+          { url: 'https://lankametro.lk/gcs-proxy/artwork_storage_dev/v7.2-Return-K-M.geojson', shapeIds: ['SHAPE_CM03_D0'] },
         ];
 
         for (const cfg of shapeConfigs) {
