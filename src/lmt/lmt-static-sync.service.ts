@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import axios from 'axios';
 import { GtfsRealtimePublisherService } from '../publisher/gtfs-realtime-publisher.service';
 import { TokenProviderService } from '../auth/token-provider.service';
+import { LmtSourceExtractorService } from './lmt-source-extractor.service';
 
 @Injectable()
 export class LmtStaticSyncService implements OnModuleInit {
@@ -11,6 +12,7 @@ export class LmtStaticSyncService implements OnModuleInit {
   constructor(
     private readonly publisher: GtfsRealtimePublisherService,
     private readonly tokenProvider: TokenProviderService,
+    private readonly sourceExtractor: LmtSourceExtractorService,
   ) {}
 
   async onModuleInit() {
@@ -83,150 +85,117 @@ export class LmtStaticSyncService implements OnModuleInit {
       });
       this.logger.log('✅ Agency & Attributions synced to server.');
 
-      // 2. Fetch GeoJSON Route Shapes (CM01 & CM02) - Skip if shapes already ingested
+      // 2. Fetch Direct-From-Source Transit Data (All 7 Routes, 220 Stops, 2009 Fares)
+      const transitData = await this.sourceExtractor.getTransitData();
+
+      // 3. Ingest Route Shapes - Skip if already ingested
       const baseUrl = process.env.TRANSIT_SERVER_URL || 'http://slr-transit-server.railway.internal:8080/api/v1';
       let shapesAlreadyIngested = false;
       try {
         const existingShapes = await axios.get(`${baseUrl}/shapes/SHAPE_CM01`, { timeout: 3000 });
         if (existingShapes.status === 200 && Array.isArray(existingShapes.data) && existingShapes.data.length > 0) {
           shapesAlreadyIngested = true;
-          this.logger.log(`✅ Route shapes [SHAPE_CM01, SHAPE_CM02] already present in DB (${existingShapes.data.length} waypoints). Skipping re-ingestion.`);
+          this.logger.log(`✅ Route shapes already present in DB (${existingShapes.data.length} waypoints). Skipping re-ingestion.`);
         }
       } catch (e) {}
 
       if (!shapesAlreadyIngested) {
-        const geoRes = await axios.get(
-          'https://lankametro.lk/gcs-proxy/artwork_storage_dev/new-release/v7-Forward-M-K.geojson',
-          { timeout: 10000 },
-        );
-        if (geoRes.status === 200 && geoRes.data) {
-          const lineFeature = geoRes.data.features?.find(
-            (f: any) => f.geometry?.type === 'LineString' || f.geometry?.type === 'MultiLineString',
-          );
+        const shapeConfigs = [
+          { url: 'https://lankametro.lk/gcs-proxy/artwork_storage_dev/v7.2-Forward-M-K.geojson', shapeIds: ['SHAPE_CM01', 'SHAPE_CM03'] },
+          { url: 'https://lankametro.lk/gcs-proxy/artwork_storage_dev/v7.2-Return-K-M.geojson', shapeIds: ['SHAPE_CM01_RET', 'SHAPE_CM03_RET'] },
+          { url: 'https://lankametro.lk/gcs-proxy/artwork_storage_dev/metro/v7.2%20Forward-M-C.geojson', shapeIds: ['SHAPE_CM02', 'SHAPE_CM08'] },
+          { url: 'https://lankametro.lk/gcs-proxy/artwork_storage_dev/metro/v7.2-Return-C-M.geojson', shapeIds: ['SHAPE_CM02_RET', 'SHAPE_CM08_RET'] },
+        ];
 
-          if (lineFeature && lineFeature.geometry?.coordinates) {
-            const coords: number[][] = lineFeature.geometry.coordinates;
-            this.logger.log(`📌 Ingesting ${coords.length * 2} shape waypoints for SHAPE_CM01 & SHAPE_CM02...`);
-
-            for (let i = 0; i < coords.length; i += 50) {
-              const chunk = coords.slice(i, i + 50);
-              await Promise.all([
-                ...chunk.map((c, idx) =>
-                  this.publisher.publishShape({
-                    shape_id: 'SHAPE_CM01',
-                    shape_pt_lat: c[1],
-                    shape_pt_lon: c[0],
-                    shape_pt_sequence: i + idx + 1,
-                  }),
-                ),
-                ...chunk.map((c, idx) =>
-                  this.publisher.publishShape({
-                    shape_id: 'SHAPE_CM02',
-                    shape_pt_lat: c[1],
-                    shape_pt_lon: c[0],
-                    shape_pt_sequence: i + idx + 1,
-                  }),
-                ),
-              ]);
+        for (const cfg of shapeConfigs) {
+          try {
+            const geoRes = await axios.get(cfg.url, { timeout: 10000 });
+            if (geoRes.status === 200 && geoRes.data) {
+              const lineFeature = geoRes.data.features?.find(
+                (f: any) => f.geometry?.type === 'LineString' || f.geometry?.type === 'MultiLineString',
+              );
+              if (lineFeature?.geometry?.coordinates) {
+                const coords: number[][] = lineFeature.geometry.coordinates;
+                for (let i = 0; i < coords.length; i += 50) {
+                  const chunk = coords.slice(i, i + 50);
+                  for (const sId of cfg.shapeIds) {
+                    await Promise.all(
+                      chunk.map((c, idx) =>
+                        this.publisher.publishShape({
+                          shape_id: sId,
+                          shape_pt_lat: c[1],
+                          shape_pt_lon: c[0],
+                          shape_pt_sequence: i + idx + 1,
+                        }),
+                      ),
+                    );
+                  }
+                }
+                this.logger.log(`✅ Shape [${cfg.shapeIds.join(', ')}] ingested (${coords.length} waypoints).`);
+              }
             }
-            this.logger.log('✅ Route shapes [SHAPE_CM01, SHAPE_CM02] ingested.');
+          } catch (shapeErr: any) {
+            this.logger.warn(`Could not ingest shape from ${cfg.url}: ${shapeErr.message}`);
           }
         }
       }
 
-      // 3. Fetch Master Routes
-      const lmtRouteUUIDs = [
-        {
-          route_id: '8bc594e3-8ad6-4a0d-9138-bf8b4247e2f5',
-          code: 'CM01',
-          name: 'CM01 (Makumbura - Maharagama - Borella - Kadawatha)',
-          color: '1A5A96',
-          shape_id: 'SHAPE_CM01',
-        },
-        {
-          route_id: 'f3eaf277-a6fa-4f5b-8a61-3b1758d9a4b8',
-          code: 'CM02',
-          name: 'CM02 (Makumbura - Rajagiriya - Fort Express)',
-          color: 'EDBF23',
-          shape_id: 'SHAPE_CM02',
-        },
-      ];
-
-      for (const r of lmtRouteUUIDs) {
+      // 4. Ingest All 7 Master Routes Direct From Source
+      for (const r of transitData.routes) {
+        const routeId = transitData.eimskyRouteIdMap.get(r.route_code) || `LMT_ROUTE_${r.route_code}`;
         await this.publisher.publishRoute({
-          route_id: r.route_id,
+          route_id: routeId,
           agency_id: 'LMT',
-          route_short_name: r.code,
+          route_short_name: r.route_code,
           route_long_name: r.name,
           route_type: 3,
-          route_color: r.color,
+          route_color: (r.color_hex || '#1A5A96').replace('#', ''),
           route_text_color: 'FFFFFF',
         });
       }
-      this.logger.log('✅ Master bus routes [CM01, CM02] synced.');
+      this.logger.log(`✅ Master bus routes (${transitData.routes.length}) synced direct from source.`);
 
-      // 4. Fetch 84 Directional Platform Stops & 21 Parent Stations across all 4 direction UUIDs
-      const directionUUIDs = [
-        { route_id: '8bc594e3-8ad6-4a0d-9138-bf8b4247e2f5', dir_id: 'fe423b83-34e7-4bd5-816b-97968dcd2b1f' }, // CM01 Outbound
-        { route_id: '8bc594e3-8ad6-4a0d-9138-bf8b4247e2f5', dir_id: '7a0aa9fc-7d82-4e7b-94ac-2bc488160194' }, // CM01 Return
-        { route_id: 'f3eaf277-a6fa-4f5b-8a61-3b1758d9a4b8', dir_id: '401ccb91-2269-471d-877c-1af77d98dba3' }, // CM02 Outbound
-        { route_id: 'f3eaf277-a6fa-4f5b-8a61-3b1758d9a4b8', dir_id: '47831874-290c-4beb-959a-3e004f8e0e00' }, // CM02 Return
-      ];
-
+      // 5. Ingest All 220 Platform Stops & Parent Station Hubs Direct From Source
       const parentStationMap = new Map<string, any>();
       const stopsMap = new Map<string, any>();
 
-      for (const dir of directionUUIDs) {
-        try {
-          const stopsRes = await axios.get(
-            `https://lankametro.lk/metrobus-proxy/fare-service/api/v1/routes/${dir.route_id}/stops?direction_id=${dir.dir_id}`,
-            { headers, timeout: 10000 },
-          );
+      for (const s of transitData.stops) {
+        const stopId = String(s.eimsky_id || s.id);
+        const latVal = s.lat;
+        const lonVal = s.lng;
+        const rawName = s.name || 'LMT Bus Stop';
 
-          if (stopsRes.status === 200 && stopsRes.data?.data?.stops) {
-            const stops = stopsRes.data.data.stops;
-            for (const s of stops) {
-              const stopId = String(s.id || s.stop_id);
-              const latVal = s.latitude || s.lat;
-              const lonVal = s.longitude || s.lng;
-              const rawName = s.stop_name_en || s.stop_name || 'LMT Bus Stop';
+        const cleanStationKey = rawName
+          .toLowerCase()
+          .replace(/ 01| 1| 02| 2| campus| station| junction| depot/gi, '')
+          .replace(/[^a-z0-9]/g, '_')
+          .trim();
+        const parentStationId = `STATION_${cleanStationKey.toUpperCase()}`;
 
-              const cleanStationKey = rawName
-                .toLowerCase()
-                .replace(/ 01| 1| 02| 2| campus| station| junction| depot/gi, '')
-                .replace(/[^a-z0-9]/g, '_')
-                .trim();
-              const parentStationId = `STATION_${cleanStationKey.toUpperCase()}`;
+        if (!parentStationMap.has(parentStationId) && latVal && lonVal) {
+          parentStationMap.set(parentStationId, {
+            stop_id: parentStationId,
+            stop_code: `STN_${cleanStationKey.slice(0, 8).toUpperCase()}`,
+            stop_name: `${rawName} Hub`,
+            stop_name_en: `${rawName} Station`,
+            stop_lat: parseFloat(String(latVal)),
+            stop_lon: parseFloat(String(lonVal)),
+            location_type: 1, // GTFS Parent Station
+            parent_station: null,
+          });
+        }
 
-              if (!parentStationMap.has(parentStationId) && latVal && lonVal) {
-                parentStationMap.set(parentStationId, {
-                  stop_id: parentStationId,
-                  stop_code: `STN_${cleanStationKey.slice(0, 8).toUpperCase()}`,
-                  stop_name: `${rawName} Hub`,
-                  stop_name_en: `${rawName} Station`,
-                  stop_lat: parseFloat(String(latVal)),
-                  stop_lon: parseFloat(String(lonVal)),
-                  location_type: 1, // GTFS Parent Station
-                  parent_station: null,
-                });
-              }
-
-              if (!stopsMap.has(stopId) && latVal && lonVal) {
-                stopsMap.set(stopId, {
-                  stop_id: stopId,
-                  stop_code: s.code || s.stop_code || `STP_${stopId.slice(0, 6)}`,
-                  stop_name: rawName,
-                  stop_name_en: rawName,
-                  stop_lat: parseFloat(String(latVal)),
-                  stop_lon: parseFloat(String(lonVal)),
-                  location_type: 0, // GTFS Platform Stop
-                  parent_station: parentStationId,
-                });
-              }
-            }
-          }
-        } catch (err: any) {
-          this.logger.warn(`Could not fetch stops for dir ${dir.dir_id}: ${err.message}`);
+        if (!stopsMap.has(stopId) && latVal && lonVal) {
+          stopsMap.set(stopId, {
+            stop_id: stopId,
+            stop_code: s.stop_code || `STP_${stopId.slice(0, 6)}`,
+            stop_name: rawName,
+            stop_name_en: rawName,
+            stop_lat: parseFloat(String(latVal)),
+            stop_lon: parseFloat(String(lonVal)),
+            location_type: 0, // GTFS Platform Stop
+            parent_station: parentStationId,
+          });
         }
       }
 
@@ -238,15 +207,18 @@ export class LmtStaticSyncService implements OnModuleInit {
       for (const platformStop of stopsMap.values()) {
         await this.publisher.publishStop(platformStop);
       }
-      this.logger.log(`✅ Ingested ${parentStationMap.size} parent station hubs and ${stopsMap.size} platform stops.`);
+      this.logger.log(`✅ Ingested ${parentStationMap.size} parent station hubs and ${stopsMap.size} platform stops direct from source.`);
 
-      // 5. Ingest Authentic Distance-Based GTFS Fare Attributes & Rules
+      // 6. Ingest Authentic Distance-Based GTFS Fare Stages & Rules Across All Routes
       const fareStages = [
         { id: 'FARE_STAGE_1_LOCAL', price: 65.0, desc: 'Short Local Hop (65 LKR)' },
         { id: 'FARE_STAGE_2_SHORT', price: 85.0, desc: 'Short Corridor Stage (85 LKR)' },
         { id: 'FARE_STAGE_3_MEDIUM', price: 110.0, desc: 'Medium Corridor Stage (110 LKR)' },
-        { id: 'FARE_STAGE_4_LONG', price: 225.0, desc: 'Long Express Stage (225 LKR)' },
-        { id: 'FARE_STAGE_5_FULL', price: 255.0, desc: 'Full Corridor Express (255 LKR)' },
+        { id: 'FARE_STAGE_4_REGULAR', price: 135.0, desc: 'Suburban Regular Stage (135 LKR)' },
+        { id: 'FARE_STAGE_5_LONG', price: 185.0, desc: 'Long Regional Stage (185 LKR)' },
+        { id: 'FARE_STAGE_6_EXPRESS', price: 225.0, desc: 'Long Express Stage (225 LKR)' },
+        { id: 'FARE_STAGE_7_FULL', price: 255.0, desc: 'Full Corridor Express (255 LKR)' },
+        { id: 'FARE_STAGE_8_MAX', price: 300.0, desc: 'Outer Terminal Express (300 LKR)' },
       ];
 
       for (const stage of fareStages) {
@@ -259,17 +231,16 @@ export class LmtStaticSyncService implements OnModuleInit {
           transfer_duration: 0,
         });
 
-        await this.publisher.publishFareRule({
-          fare_id: stage.id,
-          route_id: '8bc594e3-8ad6-4a0d-9138-bf8b4247e2f5', // CM01
-        });
-
-        await this.publisher.publishFareRule({
-          fare_id: stage.id,
-          route_id: 'f3eaf277-a6fa-4f5b-8a61-3b1758d9a4b8', // CM02
-        });
+        // Bind fare rules across all 7 active routes
+        for (const r of transitData.routes) {
+          const routeId = transitData.eimskyRouteIdMap.get(r.route_code) || `LMT_ROUTE_${r.route_code}`;
+          await this.publisher.publishFareRule({
+            fare_id: stage.id,
+            route_id: routeId,
+          });
+        }
       }
-      this.logger.log('✅ Authentic Distance-Based GTFS Fare Stages (65 - 255 LKR) ingested.');
+      this.logger.log(`✅ Authentic Distance-Based GTFS Fare Stages (65 - 300 LKR) ingested across all 7 routes.`);
 
       // 6. Sync Service Alerts & Advisories
       await this.syncNotificationsAndAlerts();

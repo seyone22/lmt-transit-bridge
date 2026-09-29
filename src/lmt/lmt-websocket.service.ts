@@ -3,6 +3,7 @@ import WebSocket from 'ws';
 import axios from 'axios';
 import { GtfsRealtimePublisherService } from '../publisher/gtfs-realtime-publisher.service';
 import { TokenProviderService } from '../auth/token-provider.service';
+import { LmtSourceExtractorService } from './lmt-source-extractor.service';
 
 interface ScheduleAssignment {
   trip_id: string;
@@ -60,6 +61,7 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly publisher: GtfsRealtimePublisherService,
     private readonly tokenProvider: TokenProviderService,
+    private readonly sourceExtractor: LmtSourceExtractorService,
   ) {}
 
   onModuleInit() {
@@ -93,56 +95,48 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
         Referer: 'https://lankametro.lk/en/smartmetro',
       };
       const todayStr = new Date().toISOString().split('T')[0];
-      const routeIds = [
+      let routeIds = [
         '8bc594e3-8ad6-4a0d-9138-bf8b4247e2f5',
         'f3eaf277-a6fa-4f5b-8a61-3b1758d9a4b8',
       ];
+      try {
+        const transitData = await this.sourceExtractor.getTransitData();
+        routeIds = Array.from(transitData.eimskyRouteIdMap.values());
+      } catch {}
 
       this.activeBusUUIDs.clear();
 
       for (const routeId of routeIds) {
-        const resp = await axios.get(
-          `https://lankametro.lk/metrobus-proxy/ticketing-service/api/v1/bus-schedule-assignments/daily-schedule?date=${todayStr}&route_id=${routeId}`,
-          { headers, timeout: 5000 },
-        );
-        const schedules = resp.data?.data?.schedules || [];
-        for (const sched of schedules) {
-          const slots = sched.slots || [];
-          for (const slot of slots) {
-            const regNum = slot.bus?.registration_number;
-            const busId = slot.bus?.bus_id;
-            const tripId = String(slot.slot_id || `TRIP_${sched.code}_${slot.slot_number}`);
-            if (regNum && busId) {
-              this.assignmentMap.set(regNum, {
-                trip_id: tripId,
-                route_id: routeId,
-                bus_id: busId,
-              });
-              this.activeBusUUIDs.set(busId, {
-                bus_id: busId,
-                regNum,
-                trip_id: tripId,
-                route_id: routeId,
-              });
+        try {
+          const resp = await axios.get(
+            `https://lankametro.lk/metrobus-proxy/ticketing-service/api/v1/bus-schedule-assignments/daily-schedule?date=${todayStr}&route_id=${routeId}`,
+            { headers, timeout: 5000 },
+          );
+          const schedules = resp.data?.data?.schedules || [];
+          for (const sched of schedules) {
+            const slots = sched.slots || [];
+            for (const slot of slots) {
+              const regNum = slot.bus?.registration_number;
+              const busId = slot.bus?.bus_id;
+              const tripId = String(slot.slot_id || `TRIP_${sched.code}_${slot.slot_number}`);
+              if (regNum && busId) {
+                this.assignmentMap.set(regNum, {
+                  trip_id: tripId,
+                  route_id: routeId,
+                  bus_id: busId,
+                });
+                this.activeBusUUIDs.set(busId, {
+                  bus_id: busId,
+                  regNum,
+                  trip_id: tripId,
+                  route_id: routeId,
+                });
+              }
             }
           }
+        } catch {
+          // Upstream RBAC 403 or network timeout - quiet fallback to dynamic live WS matching
         }
-      }
-      // Also pre-fetch long-range schedule assignments for future-proofing
-      try {
-        const assignResp = await axios.get(
-          `https://lankametro.lk/metrobus-proxy/ticketing-service/api/v1/bus-schedule-assignments`,
-          { headers, timeout: 5000 },
-        );
-        const longAssignments = assignResp.data?.data?.data || [];
-        for (const a of longAssignments) {
-          if (a.bus_id && a.slot_id && a.is_active) {
-            // Keep long range assignments cached in memory for fallback lookup
-          }
-        }
-        this.logger.log(`✅ Cached ${longAssignments.length} long-range bus schedule assignments.`);
-      } catch (err: any) {
-        // quiet fallback
       }
 
       this.logger.log(`✅ Refreshed ${this.assignmentMap.size} bus schedule assignments & ${this.activeBusUUIDs.size} active bus UUIDs.`);
@@ -154,24 +148,19 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
   private startMobileTrackingPolling() {
     if (this.pollInterval) clearInterval(this.pollInterval);
 
-    // Delta Polling Loop: Check every 45 seconds, ONLY polling buses quiet on WebSocket (> 45s)
+    // Delta Polling Loop: Check every 60 seconds, ONLY polling when WebSocket is disconnected
     this.pollInterval = setInterval(async () => {
       await this.pollMobileAppBusTracking();
-    }, 45000);
+    }, 60000);
   }
 
   private async pollMobileAppBusTracking() {
-    // Nighttime Off-Peak Backoff: 11:00 PM to 04:30 AM Sri Lanka Time (IST, UTC+5:30)
-    const now = Date.now();
-    const slDate = new Date(now + 5.5 * 3600 * 1000);
-    const slHours = slDate.getUTCHours();
-    const slMinutes = slDate.getUTCMinutes();
-    const isNighttime = slHours >= 23 || slHours < 4 || (slHours === 4 && slMinutes < 30);
-
-    if (isNighttime && this.activeBusUUIDs.size === 0) {
+    // When WebSocket is actively connected, skip polling to prevent Cloudflare WAF rate limits
+    if (this.isConnected) {
       return;
     }
 
+    const now = Date.now();
     await this.refreshScheduleAssignmentsIfNeeded();
     if (this.activeBusUUIDs.size === 0) return;
 
@@ -397,9 +386,19 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
             this.lastSeenWebSocket.set(regNum, now);
 
             const assignment = this.assignmentMap.get(regNum);
-            const tripId = assignment?.trip_id || (bus.route_id ? `TRIP_${bus.route_id.slice(0, 8)}` : `BUS_${regNum}`);
             const routeId = assignment?.route_id || bus.route_id || undefined;
             const dirInt = typeof bus.direction_id === 'number' ? bus.direction_id : (bus.direction_id ? parseInt(String(bus.direction_id), 10) || 0 : 0);
+            const tripId = assignment?.trip_id || `LMT_TRIP_${(routeId || 'CM').slice(0, 8)}_${dirInt}_${regNum}`;
+
+            let occupancyStatus: string | undefined = undefined;
+            let occupancyPercentage: number | undefined = undefined;
+            if (typeof bus.total_capacity === 'number' && bus.total_capacity > 0 && typeof bus.current_capacity === 'number') {
+              occupancyPercentage = Math.round((bus.current_capacity / bus.total_capacity) * 100);
+              if (occupancyPercentage < 50) occupancyStatus = 'MANY_SEATS_AVAILABLE';
+              else if (occupancyPercentage < 85) occupancyStatus = 'FEW_SEATS_AVAILABLE';
+              else if (occupancyPercentage < 100) occupancyStatus = 'STANDING_ROOM_ONLY';
+              else occupancyStatus = 'FULL';
+            }
 
             const timestampMs = typeof bus.timestamp === 'number' ? bus.timestamp : now;
             const prevPos = this.lastPositionMap.get(regNum);
@@ -436,6 +435,8 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
               longitude: lng,
               speed: speedKmh,
               bearing: bearingDeg,
+              occupancy_status: occupancyStatus,
+              occupancy_percentage: occupancyPercentage,
               timestamp: new Date(timestampMs).toISOString(),
             });
           }

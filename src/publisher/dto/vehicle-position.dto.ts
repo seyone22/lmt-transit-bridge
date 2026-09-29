@@ -9,5 +9,7 @@ export interface CreateVehiclePositionDto {
   longitude: number;
   bearing?: number;
   speed?: number;
+  occupancy_status?: string;
+  occupancy_percentage?: number;
   timestamp?: string;
 }

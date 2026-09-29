@@ -9,6 +9,7 @@ import { HealthController } from './health/health.controller';
 import { SyncController } from './sync/sync.controller';
 
 import { LmtStaticSyncService } from './lmt/lmt-static-sync.service';
+import { LmtSourceExtractorService } from './lmt/lmt-source-extractor.service';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { LmtStaticSyncService } from './lmt/lmt-static-sync.service';
   ],
   controllers: [HealthController, SyncController],
   providers: [
+    LmtSourceExtractorService,
     LmtWebsocketService,
     LmtStaticSyncService,
     GtfsRealtimePublisherService,

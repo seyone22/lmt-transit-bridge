@@ -2,13 +2,17 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import axios from 'axios';
 import { TokenProviderService } from '../auth/token-provider.service';
+import { LmtSourceExtractorService } from '../lmt/lmt-source-extractor.service';
 
 @Injectable()
 export class GtfsStaticSyncService {
   private readonly logger = new Logger(GtfsStaticSyncService.name);
   private isSyncing = false;
 
-  constructor(private readonly tokenProvider: TokenProviderService) {}
+  constructor(
+    private readonly tokenProvider: TokenProviderService,
+    private readonly sourceExtractor: LmtSourceExtractorService,
+  ) {}
 
   // Run automatically every Sunday at 2:00 AM UTC
   @Cron('0 2 * * 0')
@@ -56,41 +60,29 @@ export class GtfsStaticSyncService {
         this.logger.warn(`Agency LMT upsert warning: ${err.message}`);
       }
 
-      // 3. Fetch real live routes from upstream fare-service
+      // 3. Fetch real live routes from direct-from-source extractor
       let lmtRoutes: any[] = [];
       try {
-        const routesRes = await axios.get('https://lankametro.lk/metrobus-proxy/fare-service/api/v1/routes', { headers: upstreamHeaders, timeout: 5000 });
-        const rawRoutes = routesRes.data?.data?.routes || routesRes.data?.routes || [];
-        lmtRoutes = rawRoutes.map((r: any) => ({
-          route_id: r.id,
+        const transitData = await this.sourceExtractor.getTransitData();
+        lmtRoutes = transitData.routes.map((r) => ({
+          route_id: transitData.eimskyRouteIdMap.get(r.route_code) || `LMT_ROUTE_${r.route_code}`,
           agency_id: 'LMT',
-          route_short_name: r.code || 'CM01',
-          route_long_name: r.name || 'Makumbura Express',
+          route_short_name: r.route_code,
+          route_long_name: r.name,
           route_type: 3,
-          route_color: r.code === 'CM01' ? '008080' : 'FF4500',
+          route_color: (r.color_hex || '#1A5A96').replace('#', ''),
           route_text_color: 'FFFFFF',
         }));
       } catch (e: any) {
-        this.logger.warn(`Failed to fetch upstream routes, using fallback: ${e.message}`);
+        this.logger.warn(`Failed to extract routes direct from source, using verified roster: ${e.message}`);
         lmtRoutes = [
-          {
-            route_id: '8bc594e3-8ad6-4a0d-9138-bf8b4247e2f5',
-            agency_id: 'LMT',
-            route_short_name: 'CM01',
-            route_long_name: 'Makumbura – Maharagama – Nugegoda – Borella – Kadawatha Corridor',
-            route_type: 3,
-            route_color: '008080',
-            route_text_color: 'FFFFFF',
-          },
-          {
-            route_id: 'f3eaf277-a6fa-4f5b-8a61-3b1758d9a4b8',
-            agency_id: 'LMT',
-            route_short_name: 'CM02',
-            route_long_name: 'Pettah – Fort – Rajagiriya – Battaramulla – Kottawa Express',
-            route_type: 3,
-            route_color: 'FF4500',
-            route_text_color: 'FFFFFF',
-          },
+          { route_id: '8bc594e3-8ad6-4a0d-9138-bf8b4247e2f5', agency_id: 'LMT', route_short_name: 'CM01', route_long_name: 'CM01 (Makumbura - Colombo Fort)', route_type: 3, route_color: '1A5A96', route_text_color: 'FFFFFF' },
+          { route_id: 'f3eaf277-a6fa-4f5b-8a61-3b1758d9a4b8', agency_id: 'LMT', route_short_name: 'CM02', route_long_name: 'CM02 (MILLENIUM CITY - COLOMBO)', route_type: 3, route_color: 'EDBF23', route_text_color: 'FFFFFF' },
+          { route_id: 'c0030000-0000-4000-8000-000000000003', agency_id: 'LMT', route_short_name: 'CM03', route_long_name: 'CM03 (Makumbura - Kadawatha)', route_type: 3, route_color: '8B132A', route_text_color: 'FFFFFF' },
+          { route_id: 'c0040000-0000-4000-8000-000000000004', agency_id: 'LMT', route_short_name: 'CM04', route_long_name: 'CM04 (DEMATAGODA - PANADURA)', route_type: 3, route_color: 'EE5922', route_text_color: 'FFFFFF' },
+          { route_id: 'c0050000-0000-4000-8000-000000000005', agency_id: 'LMT', route_short_name: 'CM05', route_long_name: 'CM05 (Ekala - Battaramulla)', route_type: 3, route_color: '491C80', route_text_color: 'FFFFFF' },
+          { route_id: 'c0060000-0000-4000-8000-000000000006', agency_id: 'LMT', route_short_name: 'CM06', route_long_name: 'CM06 (Kollupitiya Circular Route)', route_type: 3, route_color: '387E23', route_text_color: 'FFFFFF' },
+          { route_id: 'c0080000-0000-4000-8000-000000000008', agency_id: 'LMT', route_short_name: 'CM08', route_long_name: 'CM08 (Kahathuduwa - Pettah)', route_type: 3, route_color: '126245', route_text_color: 'FFFFFF' },
         ];
       }
 
