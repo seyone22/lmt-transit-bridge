@@ -1,0 +1,78 @@
+name: Daily Live Telemetry Smoke Test
+
+on:
+  schedule:
+    # Run daily at 03:30 UTC (09:00 AM Colombo/IST) - Morning peak transit operation
+    - cron: '30 3 * * *'
+    # Run daily at 11:30 UTC (05:00 PM Colombo/IST) - Evening peak transit operation
+    - cron: '30 11 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  telemetry-smoke-test:
+    name: Verify Live Transit Telemetry Feed
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci || npm install
+
+      - name: Execute Live Telemetry Smoke Test
+        id: smoke_test
+        run: npm run smoke:test
+        env:
+          BRIDGE_URL: https://lmt-transit-bridge-production.up.railway.app
+          TRANSIT_SERVER_URL: https://api.transit.seyone.dev/api/v1
+
+      - name: Notify on Failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = `🚨 [ALERT] Live Transit Telemetry Feed has gone DARK`;
+            const body = `### ⚠️ Daily Smoke Test Failure Detected\n\n` +
+              `The automated smoke test detected that live transit data is dark, stale, or failing on production.\n\n` +
+              `- **Run ID**: [${context.runId}](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})\n` +
+              `- **Bridge Health**: https://lmt-transit-bridge-production.up.railway.app/health\n` +
+              `- **Transit Feed**: https://api.transit.seyone.dev/api/v1/realtime/vehicle-positions/list\n\n` +
+              `Please inspect the workflow run logs and the bridge deployment status immediately.`;
+
+            // Search for existing open issue to avoid spamming
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              creator: 'github-actions[bot]'
+            });
+
+            const existingIssue = issues.find(i => i.title.includes('Live Transit Telemetry Feed has gone DARK'));
+            if (existingIssue) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existingIssue.number,
+                body: `Still failing as of ${new Date().toISOString()}.\nCheck run: https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['bug', 'telemetry', 'automated-alert']
+              });
+            }
