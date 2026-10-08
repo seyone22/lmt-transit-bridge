@@ -2,10 +2,10 @@ name: Daily Live Telemetry Smoke Test
 
 on:
   schedule:
-    # Run daily at 03:30 UTC (09:00 AM Colombo/IST) - Morning peak transit operation
-    - cron: '30 3 * * *'
-    # Run daily at 11:30 UTC (05:00 PM Colombo/IST) - Evening peak transit operation
-    - cron: '30 11 * * *'
+    # Run daily at 03:00 UTC (08:30 AM Colombo/IST) - Morning peak transit rush
+    - cron: '0 3 * * *'
+    # Run daily at 12:00 UTC (05:30 PM Colombo/IST) - Evening peak transit rush
+    - cron: '0 12 * * *'
   workflow_dispatch:
 
 permissions:
