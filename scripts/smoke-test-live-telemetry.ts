@@ -7,6 +7,7 @@ interface HealthResponse {
   timestamp: string;
   upstream: {
     status: string;
+    transport?: string;
     activeBusesCount: number;
     adaptiveCadenceMs: number;
     lastPoll: string | null;
@@ -74,11 +75,13 @@ async function runSmokeTest(): Promise<void> {
     const healthRes = await axios.get<HealthResponse>(`${BRIDGE_URL}/health`, { timeout: 10000 });
     const health = healthRes.data;
 
+    const transport = health.upstream?.transport || 'stream';
     console.log(`   Status:               ${health.status}`);
     console.log(`   Upstream Health:      ${health.upstream?.status}`);
+    console.log(`   Transport Engine:     ${transport}`);
     console.log(`   Active Buses Tracked: ${health.upstream?.activeBusesCount}`);
     console.log(`   Adaptive Cadence:     ${health.upstream?.adaptiveCadenceMs}ms`);
-    console.log(`   Token Valid:          ${health.token?.isValid} (TTL: ${Math.round((health.token?.ttlSeconds || 0) / 86400)} days)`);
+    console.log(`   Token / Auth Status:  ${health.token?.isValid ? 'Valid / Active' : 'Invalid'} (TTL: ${Math.round((health.token?.ttlSeconds || 0) / 86400)} days)`);
 
     if (health.status !== 'ok' || health.upstream?.status === 'down') {
       throw new Error(`Bridge reported unhealthy status: ${health.status}`);
@@ -100,7 +103,11 @@ async function runSmokeTest(): Promise<void> {
       summaryLines.push(`- ✅ **Bridge Service**: Healthy (${trackedCount} buses in active registry, Cadence: ${health.upstream.adaptiveCadenceMs}ms)`);
     }
 
-    summaryLines.push(`- ✅ **JWT Token**: Valid (Expires: ${health.token.expiresAt})`);
+    if (transport === 'websocket') {
+      summaryLines.push(`- ✅ **Telemetry Transport**: Live WebSocket push (No token dependency, ${trackedCount} active buses)`);
+    } else {
+      summaryLines.push(`- ✅ **JWT Token**: Valid (Expires: ${health.token.expiresAt})`);
+    }
   } catch (err: any) {
     hasFailure = true;
     const msg = `❌ Bridge Health Check Failed: ${err.message}`;

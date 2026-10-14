@@ -118,7 +118,34 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
   private stopMapByName = new Map<string, { lat: number; lng: number; name: string }>();
   private stopsInitialized = false;
 
-  // Legacy WebSocket Support (Deprecated)
+  // Route & Direction Mappings (Preloaded with defaults and dynamically updated from /routes/geo)
+  private routeIdToCodeMap = new Map<string, string>([
+    ['f3eaf277-a6fa-4f5b-8a61-3b1758d9a4b8', 'CM01'],
+    ['74dc11d6-2ec4-48ab-9abe-fc5d89b7ed7f', 'CM02'],
+    ['8bc594e3-8ad6-4a0d-9138-bf8b4247e2f5', 'CM03'],
+    ['5209a823-76f1-425e-8fd1-66bf5f65b56a', 'CM04'],
+    ['19faf899-99cc-4e06-94bc-1d74f4c307fd', 'CM05'],
+    ['f4c9e297-f8ee-4c39-b5a5-cdec7674e756', 'CM06'],
+    ['0622f9e1-5730-41ec-be03-2125aa3f9075', 'CM08'],
+  ]);
+  private directionIdToIntMap = new Map<string, number>([
+    ['401ccb91-2269-471d-877c-1af77d98dba3', 0],
+    ['47831874-290c-4beb-959a-3e004f8e0e00', 1],
+    ['5e339897-322c-4bea-af10-a8e321a470ec', 0],
+    ['fd210485-e204-4aec-9af5-359753f3a776', 1],
+    ['fe423b83-34e7-4bd5-816b-97968dcd2b1f', 0],
+    ['7a0aa9fc-7d82-4e7b-94ac-2bc488160194', 1],
+    ['1b314dc5-938c-4da2-946b-5f90271a4ea2', 0],
+    ['42ecc596-3eb2-4935-8fd8-6122c6198202', 1],
+    ['fd7b32c1-7592-4c9c-8212-f1e9d6e5de91', 1],
+    ['75a0a66c-44a3-43c5-aa4a-f4e37289768c', 0],
+    ['d3c6a8f0-d5da-4806-90b5-66bb95bd887e', 0],
+    ['85eb01c2-7d08-4b7d-b909-07384a32c97d', 1],
+    ['0f384060-9c29-4a6d-ba99-bb90c22f52cc', 0],
+    ['3721dbd2-848f-4ee9-a4dc-4c2647e45497', 1],
+  ]);
+
+  // WebSocket Telemetry Connection
   private ws: WebSocket | null = null;
   private pingInterval: NodeJS.Timeout | null = null;
   private reconnectTimeout: NodeJS.Timeout | null = null;
@@ -133,36 +160,58 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
   async onModuleInit() {
     this.logger.log('🚀 Initializing LMT Telemetry Engine...');
 
-    // 0. Pre-load transit stop geolocations for fallback corridor positioning
+    // 0. Pre-load transit stop and route metadata
     await this.ensureStopsLoaded();
+    await this.ensureRouteMetadataLoaded();
 
-    // 1. Initial Fleet Discovery from live ticketing stream
-    await this.syncActiveFleetFromTickets();
+    // 1. Connect Primary High-Frequency Live WebSocket Stream
+    this.connectWebSocket();
 
-    // 2. Start ongoing Fleet Discovery loop (every 25 seconds)
+    // 2. Background Ticket Discovery fallback loop (every 30 seconds)
     this.fleetSyncInterval = setInterval(async () => {
       await this.syncActiveFleetFromTickets();
-    }, 25000);
+    }, 30000);
 
-    // 3. Start Dynamic Adaptive Telemetry Polling loop
-    this.scheduleNextTelemetryPoll(1000);
-
-    // 4. Connect Legacy WebSocket ONLY if explicitly enabled via environment variable
-    if (process.env.ENABLE_LEGACY_WS === 'true') {
-      this.logger.log('Legacy WebSocket enabled via ENABLE_LEGACY_WS=true.');
-      this.connectLegacyWebSocket();
-    } else {
-      this.logger.log(
-        'ℹ️ Legacy WebSocket is deprecated and dormant by default. Telemetry runs via resilient high-frequency adaptive ticketing stream.',
-      );
-    }
+    // 3. Dynamic Adaptive Telemetry Polling fallback loop
+    this.scheduleNextTelemetryPoll(5000);
   }
 
   onModuleDestroy() {
-    this.disconnectLegacyWebSocket();
+    this.disconnectWebSocket();
     if (this.fleetSyncInterval) clearInterval(this.fleetSyncInterval);
     if (this.pollTimeout) clearTimeout(this.pollTimeout);
     if (this.backoffTimer) clearTimeout(this.backoffTimer);
+  }
+
+  private async ensureRouteMetadataLoaded(): Promise<void> {
+    try {
+      const geoUrl = process.env.LMT_ROUTES_GEO_URL || 'https://lankametro.lk/metrobus-proxy/fare-service/api/v1/routes/geo';
+      const res = await axios.get(geoUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          Accept: 'application/json',
+        },
+        timeout: 6000,
+      });
+
+      if (res.status === 200 && Array.isArray(res.data?.data?.routes)) {
+        for (const r of res.data.data.routes) {
+          if (r.id && r.code) {
+            this.routeIdToCodeMap.set(r.id, r.code);
+          }
+          if (Array.isArray(r.directions)) {
+            r.directions.forEach((d: any, idx: number) => {
+              if (d.id) {
+                this.directionIdToIntMap.set(d.id, idx);
+              }
+            });
+          }
+        }
+        this.logger.log(`📍 Loaded metadata for ${this.routeIdToCodeMap.size} transit routes and ${this.directionIdToIntMap.size} directions.`);
+      }
+    } catch (e: any) {
+      this.logger.warn(`Route metadata preloading notice (using defaults): ${e.message}`);
+    }
   }
 
   private async ensureStopsLoaded(): Promise<void> {
@@ -207,8 +256,9 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
   }
 
   public getUpstreamStatus(): string {
+    if (this.isWsConnected) return 'healthy';
     if (this.backoffMultiplier > 1) return 'throttled';
-    return this.activeFleet.size > 0 ? 'healthy' : 'discovering';
+    return this.activeFleet.size > 0 ? 'healthy' : 'connecting';
   }
 
   // --- Stage 1: Fleet Discovery from Ticket Issuance Stream ---
@@ -219,6 +269,9 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
    * and boarding stop GPS location.
    */
   public async syncActiveFleetFromTickets(): Promise<void> {
+    if (this.isWsConnected && this.activeFleet.size > 0) {
+      return;
+    }
     await this.ensureStopsLoaded();
     try {
       const token = await this.tokenProvider.getOrRefreshToken();
@@ -327,6 +380,11 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
    */
   private async executeAdaptiveTelemetryCycle(): Promise<void> {
     if (this.isPollingActive) return;
+    if (this.isWsConnected && this.activeFleet.size > 0) {
+      // Live WebSocket stream is primary and streaming. No HTTP polling needed.
+      this.scheduleNextTelemetryPoll(5000);
+      return;
+    }
     this.isPollingActive = true;
 
     try {
@@ -495,56 +553,55 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
     }, 60000);
   }
 
-  // --- Deprecated: Legacy WebSocket Support ---
+  // --- Stage 3: High-Frequency Real-Time WebSocket Telemetry Engine ---
 
-  /**
-   * @deprecated Upstream Eimsky WebSocket currently streams only 500 dummy simulator bots
-   * while lankametro.lk/ws-proxy yields 502 Bad Gateway.
-   * Real commercial buses are tracked via ticket-stream discovery and high-frequency polling.
-   */
-  private async connectLegacyWebSocket(forceTokenRefresh = false) {
-    const wsUrl = process.env.LMT_WS_URL || 'wss://metrobusapiprod.eimsky.com/ticketing-service/ws';
-    let token = '';
-
-    try {
-      token = await this.tokenProvider.getOrRefreshToken(forceTokenRefresh);
-    } catch (err: any) {
-      this.scheduleWsReconnect(10000);
-      return;
+  private getWsUrl(): string {
+    const envUrl = process.env.LMT_WS_URL?.trim();
+    if (envUrl && !envUrl.includes('eimsky.com')) {
+      return envUrl;
     }
+    return 'wss://lankametro.lk/ws-proxy/ticketing-service/ws';
+  }
 
-    const fullUrl = token ? `${wsUrl}?token=${token}` : wsUrl;
+  private connectWebSocket() {
+    const wsUrl = this.getWsUrl();
+    this.logger.log(`🔌 Connecting to live Lanka Metro WebSocket stream: ${wsUrl}...`);
 
     try {
-      this.ws = new WebSocket(fullUrl, {
+      this.ws = new WebSocket(wsUrl, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           Origin: 'https://lankametro.lk',
         },
       });
 
       this.ws.on('open', () => {
-        this.logger.log('⚡ Connected to legacy WebSocket stream.');
+        this.logger.log('⚡ Connected to live Lanka Metro WebSocket stream (no auth token required).');
         this.isWsConnected = true;
+        this.currentIntervalMs = 5000;
         this.startWsHeartbeat();
       });
 
       this.ws.on('message', (data: WebSocket.RawData) => {
-        this.handleLegacyWsMessage(data);
+        this.handleWsMessage(data);
       });
 
       this.ws.on('error', (err) => {
-        this.logger.warn(`Legacy WebSocket error: ${err.message}`);
+        this.logger.warn(`WebSocket error: ${err.message}`);
       });
 
       this.ws.on('close', (code, reason) => {
+        this.logger.warn(
+          `WebSocket disconnected (code: ${code}, reason: ${reason.toString() || 'none'}). Reconnecting in 5s...`,
+        );
         this.isWsConnected = false;
         this.stopWsHeartbeat();
-        const isAuth = code === 401 || reason.toString().includes('401');
-        this.scheduleWsReconnect(10000, isAuth);
+        this.scheduleWsReconnect(5000);
       });
-    } catch {
-      this.scheduleWsReconnect(10000, true);
+    } catch (err: any) {
+      this.logger.error(`WebSocket initialization failed: ${err.message}`);
+      this.scheduleWsReconnect(5000);
     }
   }
 
@@ -564,14 +621,14 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private scheduleWsReconnect(delayMs = 10000, forceTokenRefresh = false) {
+  private scheduleWsReconnect(delayMs = 5000) {
     if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
     this.reconnectTimeout = setTimeout(() => {
-      this.connectLegacyWebSocket(forceTokenRefresh);
+      this.connectWebSocket();
     }, delayMs);
   }
 
-  private disconnectLegacyWebSocket() {
+  private disconnectWebSocket() {
     this.stopWsHeartbeat();
     if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
     if (this.ws) {
@@ -582,7 +639,7 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
     this.isWsConnected = false;
   }
 
-  private async handleLegacyWsMessage(rawData: WebSocket.RawData) {
+  private async handleWsMessage(rawData: WebSocket.RawData) {
     try {
       const text = rawData.toString();
       if (!text || text.trim() === '') return;
@@ -591,39 +648,129 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
       const eventType = messageObj.type || messageObj.event;
       const rawPayload = messageObj.payload;
 
+      if (eventType === 'init') {
+        this.logger.log(
+          `⚡ WebSocket session established: ${rawPayload?.client_id || 'web-client'} (${rawPayload?.message || ''})`,
+        );
+        return;
+      }
+
       if (eventType === 'gps_update' && rawPayload) {
         const busList: any[] = Array.isArray(rawPayload) ? rawPayload : [rawPayload];
         const batchPositions: any[] = [];
+        const now = Date.now();
 
         for (const bus of busList) {
-          const regNum = bus.registration_number || bus.busReg || bus.vehicle_id;
+          const regNum = (bus.registration_number || bus.busReg || bus.vehicle_id || '').trim();
           const lat = parseFloat(bus.lat || bus.latitude);
           const lng = parseFloat(bus.lng || bus.longitude);
 
-          // Strictly reject simulator devices
+          // Strictly filter via production geofence and plate validation
           if (!isValidLmtBus(regNum, lat, lng, undefined, false)) {
             continue;
           }
 
+          const routeCode = this.routeIdToCodeMap.get(bus.route_id) || (bus.route_code ? String(bus.route_code) : 'CM');
+          const dirInt =
+            typeof bus.direction_id === 'number'
+              ? bus.direction_id
+              : this.directionIdToIntMap.get(bus.direction_id) ?? (parseInt(String(bus.direction_id), 10) || 0);
+
+          const timestampMs = bus.timestamp
+            ? typeof bus.timestamp === 'number'
+              ? bus.timestamp
+              : new Date(bus.timestamp).getTime()
+            : now;
+
+          const prevPos = this.lastPositionMap.get(regNum);
+          let computedSpeed = typeof bus.speed === 'number' ? bus.speed : 0;
+          let computedBearing =
+            typeof bus.bearing === 'number'
+              ? bus.bearing
+              : typeof bus.heading === 'number'
+                ? bus.heading
+                : 0;
+
+          if (prevPos) {
+            const distMeters = haversineMeters(prevPos.latitude, prevPos.longitude, lat, lng);
+            const dtSec = (timestampMs - prevPos.timestamp) / 1000;
+            if (dtSec > 0) {
+              if (distMeters > 4.0) {
+                computedSpeed = Math.round((distMeters / dtSec) * 3.6 * 10) / 10;
+                computedBearing = calculateBearingDeg(prevPos.latitude, prevPos.longitude, lat, lng);
+              } else {
+                computedSpeed = prevPos.speed > 0 ? prevPos.speed : 15.0;
+                computedBearing = prevPos.bearing;
+              }
+            } else {
+              computedSpeed = prevPos.speed || 15.0;
+              computedBearing = prevPos.bearing;
+            }
+          } else if (computedSpeed === 0) {
+            computedSpeed = 18.0;
+          }
+
+          this.lastPositionMap.set(regNum, {
+            latitude: lat,
+            longitude: lng,
+            timestamp: timestampMs,
+            speed: computedSpeed,
+            bearing: computedBearing,
+          });
+
+          const tripId = bus.trip_id || `LMT_${routeCode}_${dirInt}_${regNum}`;
+          const occupancyPercentage =
+            typeof bus.current_capacity === 'number' && typeof bus.total_capacity === 'number' && bus.total_capacity > 0
+              ? Math.round((bus.current_capacity / bus.total_capacity) * 100)
+              : undefined;
+
+          this.activeFleet.set(bus.bus_id || regNum, {
+            bus_id: bus.bus_id || regNum,
+            regNum,
+            trip_id: tripId,
+            route_id: routeCode,
+            route_code: routeCode,
+            direction_id: dirInt,
+            lastTicketTime: timestampMs,
+            latitude: lat,
+            longitude: lng,
+          });
+
           batchPositions.push({
-            trip_id: bus.trip_id || `LMT_TRIP_${regNum}`,
-            route_id: bus.route_id,
-            direction_id: bus.direction_id || 0,
+            trip_id: tripId,
+            route_id: routeCode,
+            direction_id: dirInt,
             vehicle_id: regNum,
             vehicle_label: regNum,
             license_plate: regNum,
             latitude: lat,
             longitude: lng,
-            speed: parseFloat(bus.speed) || 0,
-            bearing: parseFloat(bus.bearing || bus.heading) || 0,
-            timestamp: new Date().toISOString(),
+            speed: computedSpeed,
+            bearing: computedBearing,
+            occupancy_percentage: occupancyPercentage,
+            timestamp: new Date(timestampMs).toISOString(),
           });
         }
 
+        // Evict vehicles inactive for > 45 minutes
+        const evictionThreshold = now - 45 * 60 * 1000;
+        for (const [busId, bus] of this.activeFleet.entries()) {
+          if (bus.lastTicketTime < evictionThreshold) {
+            this.activeFleet.delete(busId);
+            this.lastPositionMap.delete(bus.regNum);
+          }
+        }
+
         if (batchPositions.length > 0) {
+          this.lastPollTimestamp = Date.now();
           await this.publisher.publishVehiclePositionsBatch(batchPositions);
+          this.logger.log(
+            `⚡ Ingested real-time WebSocket telemetry for ${batchPositions.length} active buses (total fleet: ${this.activeFleet.size})`,
+          );
         }
       }
-    } catch {}
+    } catch (err: any) {
+      this.logger.error(`Error processing WebSocket message: ${err.message}`);
+    }
   }
 }
