@@ -209,38 +209,34 @@ export class LmtStaticSyncService implements OnModuleInit {
       }
       this.logger.log(`✅ Ingested ${parentStationMap.size} parent station hubs and ${stopsMap.size} platform stops direct from source.`);
 
-      // 6. Ingest Authentic Distance-Based GTFS Fare Stages & Rules Across All Routes
-      const fareStages = [
-        { id: 'FARE_STAGE_1_LOCAL', price: 65.0, desc: 'Short Local Hop (65 LKR)' },
-        { id: 'FARE_STAGE_2_SHORT', price: 85.0, desc: 'Short Corridor Stage (85 LKR)' },
-        { id: 'FARE_STAGE_3_MEDIUM', price: 110.0, desc: 'Medium Corridor Stage (110 LKR)' },
-        { id: 'FARE_STAGE_4_REGULAR', price: 135.0, desc: 'Suburban Regular Stage (135 LKR)' },
-        { id: 'FARE_STAGE_5_LONG', price: 185.0, desc: 'Long Regional Stage (185 LKR)' },
-        { id: 'FARE_STAGE_6_EXPRESS', price: 225.0, desc: 'Long Express Stage (225 LKR)' },
-        { id: 'FARE_STAGE_7_FULL', price: 255.0, desc: 'Full Corridor Express (255 LKR)' },
-        { id: 'FARE_STAGE_8_MAX', price: 300.0, desc: 'Outer Terminal Express (300 LKR)' },
-      ];
+      // 6. Ingest Authentic Direct-From-Source Fare Attributes & Exact Stop-to-Stop Fare Rules (2,575 Rules)
+      const uniquePrices = [...new Set(transitData.fareMatrix.map((f) => f.full_amount_lkr))].sort((a, b) => a - b);
+      const fareAttributesToPublish = uniquePrices.map((price) => ({
+        fare_id: `FARE_LMT_${price}_LKR`,
+        price: Number(price),
+        currency_type: 'LKR',
+        payment_method: 0,
+        transfers: 0,
+        transfer_duration: null,
+        agency_id: 'LMT',
+      }));
 
-      for (const stage of fareStages) {
-        await this.publisher.publishFareAttribute({
-          fare_id: stage.id,
-          price: stage.price,
-          currency_type: 'LKR',
-          payment_method: 0, // Pay on board / POS validator
-          transfers: 0,
-          transfer_duration: 0,
-        });
+      await this.publisher.publishFareAttributesBatch(fareAttributesToPublish);
 
-        // Bind fare rules across all 7 active routes
-        for (const r of transitData.routes) {
-          const routeId = transitData.eimskyRouteIdMap.get(r.route_code) || `LMT_ROUTE_${r.route_code}`;
-          await this.publisher.publishFareRule({
-            fare_id: stage.id,
-            route_id: routeId,
-          });
-        }
-      }
-      this.logger.log(`✅ Authentic Distance-Based GTFS Fare Stages (65 - 300 LKR) ingested across all 7 routes.`);
+      const fareRulesToPublish = transitData.fareMatrix.map((f) => {
+        const routeId = transitData.eimskyRouteIdMap.get(f.route_code) || `LMT_ROUTE_${f.route_code}`;
+        return {
+          fare_id: `FARE_LMT_${f.full_amount_lkr}_LKR`,
+          route_id: routeId,
+          origin_id: String(f.from_stop_id),
+          destination_id: String(f.to_stop_id),
+        };
+      });
+
+      await this.publisher.syncFareRulesMatrix(fareRulesToPublish);
+      this.logger.log(
+        `✅ Ingested ${fareAttributesToPublish.length} distinct fare attributes and ${fareRulesToPublish.length} exact stop-to-stop fare rules across all 7 routes!`,
+      );
 
       // 6. Sync Service Alerts & Advisories
       await this.syncNotificationsAndAlerts();

@@ -11,5 +11,7 @@ export interface CreateVehiclePositionDto {
   speed?: number;
   occupancy_status?: string;
   occupancy_percentage?: number;
+  capacity_current?: number;
+  capacity_total?: number;
   timestamp?: string;
 }

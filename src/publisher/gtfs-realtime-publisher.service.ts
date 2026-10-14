@@ -102,8 +102,41 @@ export class GtfsRealtimePublisherService {
     return this.postToCrudEndpoint('/fare-attributes', data);
   }
 
+  async publishFareAttributesBatch(items: any[]): Promise<boolean> {
+    if (!items || items.length === 0) return true;
+    return this.postToCrudEndpoint('/fare-attributes/batch', items);
+  }
+
   async publishFareRule(data: any): Promise<boolean> {
     return this.postToCrudEndpoint('/fare-rules', data);
+  }
+
+  async publishFareRulesBatch(items: any[], chunkSize = 250): Promise<boolean> {
+    if (!items || items.length === 0) return true;
+    let allOk = true;
+    for (let i = 0; i < items.length; i += chunkSize) {
+      const chunk = items.slice(i, i + chunkSize);
+      const ok = await this.postToCrudEndpoint('/fare-rules/batch', chunk);
+      if (!ok) allOk = false;
+    }
+    return allOk;
+  }
+
+  async syncFareRulesMatrix(items: any[], chunkSize = 500): Promise<boolean> {
+    if (!items || items.length === 0) return true;
+    // First chunk uses /sync to reset and write initial set
+    const firstChunk = items.slice(0, chunkSize);
+    const initialOk = await this.postToCrudEndpoint('/fare-rules/sync', firstChunk);
+    if (!initialOk) return false;
+
+    // Remaining chunks use /batch
+    let allOk = true;
+    for (let i = chunkSize; i < items.length; i += chunkSize) {
+      const chunk = items.slice(i, i + chunkSize);
+      const ok = await this.postToCrudEndpoint('/fare-rules/batch', chunk);
+      if (!ok) allOk = false;
+    }
+    return allOk;
   }
 
   async publishAlert(data: any): Promise<boolean> {

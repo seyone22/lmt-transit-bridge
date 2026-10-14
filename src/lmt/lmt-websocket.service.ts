@@ -719,10 +719,27 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
           });
 
           const tripId = bus.trip_id || `LMT_${routeCode}_${dirInt}_${regNum}`;
-          const occupancyPercentage =
-            typeof bus.current_capacity === 'number' && typeof bus.total_capacity === 'number' && bus.total_capacity > 0
-              ? Math.round((bus.current_capacity / bus.total_capacity) * 100)
-              : undefined;
+          const hasCapacity =
+            typeof bus.current_capacity === 'number' &&
+            typeof bus.total_capacity === 'number' &&
+            bus.total_capacity > 0;
+
+          const occupancyPercentage = hasCapacity
+            ? Math.round((bus.current_capacity / bus.total_capacity) * 100)
+            : undefined;
+
+          let occupancyStatus: string | undefined = undefined;
+          if (occupancyPercentage !== undefined) {
+            if (occupancyPercentage <= 0) occupancyStatus = 'EMPTY';
+            else if (occupancyPercentage <= 50) occupancyStatus = 'MANY_SEATS_AVAILABLE';
+            else if (occupancyPercentage <= 85) occupancyStatus = 'FEW_SEATS_AVAILABLE';
+            else if (occupancyPercentage <= 100) occupancyStatus = 'STANDING_ROOM_ONLY';
+            else occupancyStatus = 'FULL';
+          }
+
+          const vehicleLabel = hasCapacity
+            ? `${regNum} (${Math.max(0, bus.total_capacity - bus.current_capacity)}/${bus.total_capacity} seats free)`
+            : regNum;
 
           this.activeFleet.set(bus.bus_id || regNum, {
             bus_id: bus.bus_id || regNum,
@@ -741,13 +758,16 @@ export class LmtWebsocketService implements OnModuleInit, OnModuleDestroy {
             route_id: routeCode,
             direction_id: dirInt,
             vehicle_id: regNum,
-            vehicle_label: regNum,
+            vehicle_label: vehicleLabel,
             license_plate: regNum,
             latitude: lat,
             longitude: lng,
             speed: computedSpeed,
             bearing: computedBearing,
+            occupancy_status: occupancyStatus,
             occupancy_percentage: occupancyPercentage,
+            capacity_current: typeof bus.current_capacity === 'number' ? bus.current_capacity : undefined,
+            capacity_total: typeof bus.total_capacity === 'number' ? bus.total_capacity : undefined,
             timestamp: new Date(timestampMs).toISOString(),
           });
         }
