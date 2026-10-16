@@ -11,7 +11,8 @@ export class HealthController {
 
   @Get()
   getHealth() {
-    const isWsActive = this.lmtTelemetryService.getIsConnected();
+    const isWsStreaming = this.lmtTelemetryService.isWsActivelyStreaming();
+    const isConnected = this.lmtTelemetryService.getIsConnected();
     const expiresAtSec = this.tokenProvider.getTokenExpiresAt();
     const nowSec = Math.floor(Date.now() / 1000);
     const ttlSeconds = expiresAtSec > 0 ? Math.max(0, expiresAtSec - nowSec) : 0;
@@ -22,7 +23,7 @@ export class HealthController {
       timestamp: new Date().toISOString(),
       upstream: {
         status: this.lmtTelemetryService.getUpstreamStatus(),
-        transport: isWsActive ? 'websocket' : 'http_polling',
+        transport: isWsStreaming ? 'websocket' : 'http_edge_fallback',
         activeBusesCount: this.lmtTelemetryService.getActiveBusesCount(),
         adaptiveCadenceMs: this.lmtTelemetryService.getCurrentIntervalMs(),
         lastPoll: this.lmtTelemetryService.getLastPollTimestamp()
@@ -31,9 +32,9 @@ export class HealthController {
         trackedBuses: this.lmtTelemetryService.getTrackedBusesList(),
       },
       token: {
-        isValid: isWsActive || this.tokenProvider.hasValidToken(),
+        isValid: isConnected || this.tokenProvider.hasValidToken(),
         expiresAt: expiresAtSec > 0 ? new Date(expiresAtSec * 1000).toISOString() : null,
-        ttlSeconds: isWsActive ? (ttlSeconds > 0 ? ttlSeconds : 86400) : ttlSeconds,
+        ttlSeconds: isConnected ? (ttlSeconds > 0 ? ttlSeconds : 86400) : ttlSeconds,
       },
     };
   }

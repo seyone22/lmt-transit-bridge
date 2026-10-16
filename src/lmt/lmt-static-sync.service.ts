@@ -44,13 +44,6 @@ export class LmtStaticSyncService implements OnModuleInit {
     this.logger.log('📥 Executing Full Automated Ingestion of Agency, Attributions, Shapes, Routes, Stops & Timetables...');
 
     try {
-      const token = await this.tokenProvider.getOrRefreshToken();
-      const headers = {
-        Authorization: `Bearer ${token}`,
-        'User-Agent': 'okhttp/4.10.0',
-        Accept: 'application/json',
-      };
-
       // 1. Sync Agency & Attributions
       await this.publisher.publishAgency({
         agency_id: 'LMT',
@@ -248,6 +241,9 @@ export class LmtStaticSyncService implements OnModuleInit {
   }
 
   private async syncNotificationsAndAlerts(): Promise<void> {
+    if (!this.tokenProvider.hasValidToken() && !process.env.LMT_JWT_TOKEN) {
+      return;
+    }
     try {
       const token = await this.tokenProvider.getOrRefreshToken();
       const headers = {

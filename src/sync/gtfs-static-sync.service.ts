@@ -38,11 +38,7 @@ export class GtfsStaticSyncService {
         Authorization: `Bearer ${apiKey}`,
       };
 
-      // 1. Resolve fresh token for upstream LMT Go
-      const token = await this.tokenProvider.getOrRefreshToken();
-      const upstreamHeaders = { Authorization: `Bearer ${token}`, 'User-Agent': 'okhttp/4.10.0' };
-
-      // 2. Ensure LMT Agency exists
+      // 1. Ensure LMT Agency exists
       try {
         await axios.post(
           `${transitServerUrl}/agency`,

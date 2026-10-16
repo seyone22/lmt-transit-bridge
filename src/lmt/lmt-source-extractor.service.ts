@@ -51,7 +51,7 @@ export class LmtSourceExtractorService {
   private cachedData: ExtractedTransitData | null = null;
   private lastFetchedAt = 0;
 
-  private readonly knownChunkUrl = 'https://lankametro.lk/_next/static/chunks/2n389slzr1fhl.js';
+  private readonly knownChunkUrl = 'https://lankametro.lk/_next/static/chunks/3db-dlvnqsye5.js';
 
   async getTransitData(forceRefresh = false): Promise<ExtractedTransitData> {
     const now = Date.now();
@@ -64,6 +64,31 @@ export class LmtSourceExtractorService {
     try {
       const chunkCode = await this.fetchLatestRouteChunkCode();
       const extracted = this.parseChunkCode(chunkCode);
+
+      // Enrich routes and fares from Cloudflare D1 Edge API if available
+      try {
+        const [routesRes, faresRes] = await Promise.all([
+          axios.get('https://lankametro.lk/api/routes', { timeout: 5000 }).catch(() => null),
+          axios.get('https://lankametro.lk/api/fares', { timeout: 5000 }).catch(() => null),
+        ]);
+
+        if (routesRes?.data?.success && Array.isArray(routesRes.data.routes) && routesRes.data.routes.length > 0) {
+          extracted.routes = routesRes.data.routes.map((r: any) => ({
+            id: r.id,
+            route_code: r.code || r.route_code,
+            name: r.name,
+            name_si: r.name_si || r.name,
+            name_ta: r.name_ta || r.name,
+            color_hex: r.color_hex || '#1A5A96',
+            status: r.status || 'active',
+          }));
+        }
+
+        if (faresRes?.data?.success && Array.isArray(faresRes.data.fares) && faresRes.data.fares.length > 0) {
+          extracted.fareMatrix = faresRes.data.fares;
+        }
+      } catch {}
+
       this.cachedData = extracted;
       this.lastFetchedAt = now;
       this.logger.log(

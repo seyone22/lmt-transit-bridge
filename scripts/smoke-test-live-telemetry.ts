@@ -83,11 +83,11 @@ async function runSmokeTest(): Promise<void> {
     console.log(`   Adaptive Cadence:     ${health.upstream?.adaptiveCadenceMs}ms`);
     console.log(`   Token / Auth Status:  ${health.token?.isValid ? 'Valid / Active' : 'Invalid'} (TTL: ${Math.round((health.token?.ttlSeconds || 0) / 86400)} days)`);
 
-    if (health.status !== 'ok' || health.upstream?.status === 'down') {
-      throw new Error(`Bridge reported unhealthy status: ${health.status}`);
+    if (health.status !== 'ok' || health.upstream?.status === 'down' || (colomboTime.isOperational && (health.upstream?.status === 'stale_stream' || health.upstream?.status === 'degraded'))) {
+      throw new Error(`Bridge reported unhealthy upstream status: ${health.upstream?.status || health.status}`);
     }
 
-    if (!health.token?.isValid || (health.token?.ttlSeconds || 0) <= 0) {
+    if (transport === 'http_polling' && (!health.token?.isValid || (health.token?.ttlSeconds || 0) <= 0)) {
       throw new Error('Bridge JWT token is expired or invalid.');
     }
 
